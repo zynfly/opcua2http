@@ -1,0 +1,9 @@
+{
+  "name": "opcua2http",
+  "version": "1.0.0",
+  "dependencies": [
+    "open62541",
+    "nlohmann-json",
+    "crow"
+  ]
+}
