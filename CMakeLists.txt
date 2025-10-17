@@ -18,6 +18,7 @@ set(SOURCES
     src/config/Configuration.cpp
     src/core/OPCUAHTTPBridge.cpp
     src/opcua/OPCUAClient.cpp
+    src/cache/CacheManager.cpp
 )
 
 # Create executable
@@ -56,8 +57,10 @@ if(BUILD_TESTS)
     # Test source files
     set(TEST_SOURCES
         tests/unit/test_opcua_client.cpp
+        tests/unit/test_cache_manager.cpp
         src/config/Configuration.cpp
         src/opcua/OPCUAClient.cpp
+        src/cache/CacheManager.cpp
     )
     
     # Create test executable
