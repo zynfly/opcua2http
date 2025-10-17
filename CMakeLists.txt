@@ -56,17 +56,24 @@ if(BUILD_TESTS)
     # Enable testing
     enable_testing()
     
+    # Common test infrastructure
+    set(TEST_COMMON_SOURCES
+        tests/common/MockOPCUAServer.cpp
+        tests/common/OPCUATestBase.cpp
+    )
+    
     # Test source files
     set(TEST_SOURCES
-        tests/unit/test_opcua_client.cpp
+        tests/test_main.cpp
         tests/unit/test_cache_manager.cpp
+        tests/unit/test_opcua_client.cpp
         tests/unit/test_subscription_manager.cpp
-        tests/unit/test_reconnection_manager.cpp
         src/config/Configuration.cpp
         src/opcua/OPCUAClient.cpp
         src/cache/CacheManager.cpp
         src/subscription/SubscriptionManager.cpp
         src/reconnection/ReconnectionManager.cpp
+        ${TEST_COMMON_SOURCES}
     )
     
     # Create test executable
@@ -83,7 +90,7 @@ if(BUILD_TESTS)
     )
     
     # Include directories for tests
-    target_include_directories(opcua2http_tests PRIVATE include)
+    target_include_directories(opcua2http_tests PRIVATE include tests)
     
     # Compiler-specific options for tests
     if(MSVC)
