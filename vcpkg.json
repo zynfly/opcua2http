@@ -4,6 +4,7 @@
   "dependencies": [
     "open62541",
     "nlohmann-json",
-    "crow"
+    "crow",
+    "gtest"
   ]
 }
