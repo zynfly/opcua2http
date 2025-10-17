@@ -20,6 +20,7 @@ set(SOURCES
     src/opcua/OPCUAClient.cpp
     src/cache/CacheManager.cpp
     src/subscription/SubscriptionManager.cpp
+    src/reconnection/ReconnectionManager.cpp
 )
 
 # Create executable
@@ -60,10 +61,12 @@ if(BUILD_TESTS)
         tests/unit/test_opcua_client.cpp
         tests/unit/test_cache_manager.cpp
         tests/unit/test_subscription_manager.cpp
+        tests/unit/test_reconnection_manager.cpp
         src/config/Configuration.cpp
         src/opcua/OPCUAClient.cpp
         src/cache/CacheManager.cpp
         src/subscription/SubscriptionManager.cpp
+        src/reconnection/ReconnectionManager.cpp
     )
     
     # Create test executable
