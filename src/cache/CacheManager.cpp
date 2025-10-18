@@ -1,6 +1,8 @@
 #include "cache/CacheManager.h"
 #include <algorithm>
 #include <iostream>
+#include <mutex>
+#include <vector>
 
 namespace opcua2http {
 
