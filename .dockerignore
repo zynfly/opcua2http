@@ -1,0 +1,68 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Build artifacts
+cmake-build-*
+build/
+out/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Tests
+tests/
+*.test
+
+# Logs
+*.log
+logs/
+
+# Environment and secrets
+.env
+.env.*
+*.key
+*.pem
+*.crt
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.cache
+
+# vcpkg (will be installed in container)
+vcpkg/
+vcpkg_installed/
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+

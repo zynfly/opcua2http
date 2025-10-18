@@ -8,6 +8,44 @@ and use nlohmann-json to parse json.
 
 ## usage
 
+### starting the application
+
+**Basic usage:**
+```bash
+opcua2http.exe
+```
+
+**Command-line options:**
+```bash
+opcua2http.exe [OPTIONS]
+
+Options:
+  -h, --help              Show help message and exit
+  -v, --version           Show version information and exit
+  -c, --config            Show configuration information and exit
+  -d, --debug             Enable debug logging
+  -q, --quiet             Suppress non-error output
+  --log-level LEVEL       Set log level (trace, debug, info, warn, error, critical)
+```
+
+**Examples:**
+```bash
+# Start with default settings
+opcua2http.exe
+
+# Start with debug logging
+opcua2http.exe --debug
+
+# Start with trace logging
+opcua2http.exe --log-level trace
+
+# Start in quiet mode (only errors)
+opcua2http.exe --quiet
+
+# Show all configuration options
+opcua2http.exe --config
+```
+
 ### API endpoint
 
 Read OPC UA values:
@@ -193,6 +231,12 @@ Expected performance on typical hardware:
 - Cache improvement: Cached requests significantly faster than initial reads
 - Stability: >95% success rate during extended testing
 - Memory: Handle 100+ cached items without issues
+
+## deployment
+
+For production deployment, Docker setup, and detailed configuration:
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Complete deployment guide
+- **[MAINTENANCE.md](MAINTENANCE.md)** - Maintenance and troubleshooting
 
 ## build
 

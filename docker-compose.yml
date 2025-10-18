@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  # OPC UA HTTP Bridge Service
+  opcua-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: opcua-http-bridge:latest
+    container_name: opcua-http-bridge
+    restart: unless-stopped
+    
+    # Port mapping
+    ports:
+      - "${SERVER_PORT:-3000}:3000"
+    
+    # Environment configuration
+    environment:
+      # Core OPC UA Configuration
+      - OPC_ENDPOINT=${OPC_ENDPOINT:-opc.tcp://opcua-server:4840}
+      - OPC_SECURITY_MODE=${OPC_SECURITY_MODE:-1}
+      - OPC_SECURITY_POLICY=${OPC_SECURITY_POLICY:-None}
+      - OPC_NAMESPACE=${OPC_NAMESPACE:-2}
+      - OPC_APPLICATION_URI=${OPC_APPLICATION_URI:-urn:opcua-http-bridge}
+      
+      # Connection Configuration
+      - CONNECTION_RETRY_MAX=${CONNECTION_RETRY_MAX:-5}
+      - CONNECTION_INITIAL_DELAY=${CONNECTION_INITIAL_DELAY:-1000}
+      - CONNECTION_MAX_RETRY=${CONNECTION_MAX_RETRY:--1}
+      - CONNECTION_MAX_DELAY=${CONNECTION_MAX_DELAY:-30000}
+      - CONNECTION_RETRY_DELAY=${CONNECTION_RETRY_DELAY:-5000}
+      
+      # Web Server Configuration
+      - SERVER_PORT=3000
+      
+      # Security Configuration
+      - API_KEY=${API_KEY:-}
+      - AUTH_USERNAME=${AUTH_USERNAME:-}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      
+      # Cache Configuration
+      - CACHE_EXPIRE_MINUTES=${CACHE_EXPIRE_MINUTES:-60}
+      - SUBSCRIPTION_CLEANUP_MINUTES=${SUBSCRIPTION_CLEANUP_MINUTES:-30}
+      
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    
+    # Load additional environment variables from .env file
+    env_file:
+      - .env
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Networks
+    networks:
+      - opcua-network
+    
+    # Volumes for logs (optional)
+    volumes:
+      - ./logs:/app/logs
+
+  # Optional: Mock OPC UA Server for testing
+  opcua-server:
+    image: open62541/open62541:latest
+    container_name: opcua-test-server
+    restart: unless-stopped
+    ports:
+      - "4840:4840"
+    networks:
+      - opcua-network
+    profiles:
+      - testing
+
+networks:
+  opcua-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+
