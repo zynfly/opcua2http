@@ -21,6 +21,7 @@ set(SOURCES
     src/cache/CacheManager.cpp
     src/subscription/SubscriptionManager.cpp
     src/reconnection/ReconnectionManager.cpp
+    src/http/APIHandler.cpp
 )
 
 # Create executable
@@ -68,11 +69,13 @@ if(BUILD_TESTS)
         tests/unit/test_cache_manager.cpp
         tests/unit/test_opcua_client.cpp
         tests/unit/test_subscription_manager.cpp
+        tests/unit/test_api_handler.cpp
         src/config/Configuration.cpp
         src/opcua/OPCUAClient.cpp
         src/cache/CacheManager.cpp
         src/subscription/SubscriptionManager.cpp
         src/reconnection/ReconnectionManager.cpp
+        src/http/APIHandler.cpp
         ${TEST_COMMON_SOURCES}
     )
     
@@ -83,6 +86,7 @@ if(BUILD_TESTS)
     target_link_libraries(opcua2http_tests 
         PRIVATE 
         open62541::open62541
+        Crow::Crow
         nlohmann_json::nlohmann_json
         GTest::gtest
         GTest::gmock
