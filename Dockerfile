@@ -13,6 +13,10 @@ RUN apt-get update && apt-get install -y \
     tar \
     pkg-config \
     ninja-build \
+    python3 \
+    python3-pip \
+    python3-dev \
+    linux-libc-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install vcpkg
@@ -28,12 +32,20 @@ ENV PATH="${VCPKG_ROOT}:${PATH}"
 
 # Copy source code
 WORKDIR /build
+
+COPY vcpkg.json .
+
+# Install vcpkg dependencies first
+RUN ${VCPKG_ROOT}/vcpkg install --triplet=x64-linux
+
 COPY . .
 
 # Build the application
 RUN cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake \
+    -DCMAKE_C_COMPILER=gcc \
+    -DCMAKE_CXX_COMPILER=g++ \
     -DBUILD_TESTS=OFF \
     -G Ninja && \
     cmake --build build --config Release --target opcua2http
