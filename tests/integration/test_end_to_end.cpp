@@ -518,5 +518,86 @@ TEST_F(EndToEndIntegrationTest, MixedValidInvalidRequests) {
     EXPECT_NE(invalidResult["reason"], "Good");
 }
 
+/**
+ * @brief Test mixed cached and non-cached requests
+ * 
+ * This test specifically verifies the fix for the issue where requesting
+ * both cached and non-cached data simultaneously could cause ordering problems.
+ * 
+ * Verifies that:
+ * 1. First request populates cache for some nodes
+ * 2. Second request with mixed cached/non-cached nodes returns correct order
+ * 3. All results are successful and in the expected order
+ */
+TEST_F(EndToEndIntegrationTest, MixedCachedAndNonCachedRequests) {
+    std::string nodeId1 = getTestNodeId(1001);
+    std::string nodeId2 = getTestNodeId(1002);
+    std::string nodeId3 = getTestNodeId(1003);
+    
+    // Step 1: Make first request to populate cache for node1
+    std::cout << "Step 1: Populating cache with first node" << std::endl;
+    auto response1 = makeAPIRequest(nodeId1);
+    
+    ASSERT_TRUE(response1.contains("readResults"));
+    ASSERT_EQ(response1["readResults"].size(), 1);
+    
+    auto result1 = response1["readResults"][0];
+    EXPECT_EQ(result1["nodeId"], nodeId1);
+    EXPECT_TRUE(result1["success"].get<bool>());
+    EXPECT_EQ(result1["reason"], "Good");
+    
+    // Wait a bit for subscription to be established
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    
+    // Step 2: Make mixed request (cached node1 + non-cached node2 and node3)
+    std::cout << "Step 2: Making mixed request with cached and non-cached nodes" << std::endl;
+    auto response2 = makeAPIRequest(nodeId1 + "," + nodeId2 + "," + nodeId3);
+    
+    ASSERT_TRUE(response2.contains("readResults"));
+    ASSERT_EQ(response2["readResults"].size(), 3);
+    
+    // Verify results are in the correct order (this was the bug we fixed)
+    auto results = response2["readResults"];
+    
+    EXPECT_EQ(results[0]["nodeId"], nodeId1) << "First result should be for first requested node";
+    EXPECT_EQ(results[1]["nodeId"], nodeId2) << "Second result should be for second requested node";
+    EXPECT_EQ(results[2]["nodeId"], nodeId3) << "Third result should be for third requested node";
+    
+    // Verify all results are successful
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_TRUE(results[i]["success"].get<bool>()) 
+            << "Result " << i << " for node " << results[i]["nodeId"] << " should be successful";
+        EXPECT_EQ(results[i]["reason"], "Good") 
+            << "Result " << i << " should have 'Good' status";
+        EXPECT_TRUE(results[i].contains("value")) 
+            << "Result " << i << " should have a value";
+    }
+    
+    std::cout << "Step 3: Verifying order preservation in mixed requests" << std::endl;
+    
+    // Step 3: Make another mixed request with different order to verify consistency
+    auto response3 = makeAPIRequest(nodeId3 + "," + nodeId1 + "," + nodeId2);
+    
+    ASSERT_TRUE(response3.contains("readResults"));
+    ASSERT_EQ(response3["readResults"].size(), 3);
+    
+    auto results3 = response3["readResults"];
+    
+    // Verify order is preserved even when all nodes are now cached
+    EXPECT_EQ(results3[0]["nodeId"], nodeId3) << "First result should be for first requested node (node3)";
+    EXPECT_EQ(results3[1]["nodeId"], nodeId1) << "Second result should be for second requested node (node1)";
+    EXPECT_EQ(results3[2]["nodeId"], nodeId2) << "Third result should be for third requested node (node2)";
+    
+    // Verify all results are still successful
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_TRUE(results3[i]["success"].get<bool>()) 
+            << "Result " << i << " for node " << results3[i]["nodeId"] << " should be successful";
+        EXPECT_EQ(results3[i]["reason"], "Good") 
+            << "Result " << i << " should have 'Good' status";
+    }
+    
+    std::cout << "Mixed cache scenario test completed successfully" << std::endl;
+}
+
 } // namespace test
 } // namespace opcua2http
