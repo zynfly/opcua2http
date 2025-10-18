@@ -3,12 +3,9 @@
 #include <memory>
 #include <atomic>
 #include <thread>
+#include <chrono>
 #include "config/Configuration.h"
-
-// Forward declarations
-namespace crow {
-    class SimpleApp;
-}
+#include "crow.h"
 
 namespace opcua2http {
 
@@ -83,7 +80,7 @@ private:
     std::unique_ptr<APIHandler> apiHandler_;
     
     // Crow HTTP application
-    std::unique_ptr<crow::SimpleApp> app_;
+    crow::SimpleApp app_;
     
     // Runtime state
     std::atomic<bool> running_;

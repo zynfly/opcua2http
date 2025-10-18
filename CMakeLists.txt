@@ -1,8 +1,19 @@
 cmake_minimum_required(VERSION 3.20)
-project(opcua2http)
+project(opcua2http LANGUAGES CXX)
 
+# Set C++20 standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Set default build type if not specified
+if(NOT CMAKE_BUILD_TYPE)
+    message(STATUS "CMAKE_BUILD_TYPE not given; setting to 'Debug'")
+    set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Choose the type of build" FORCE)
+endif()
+
+# Enable compile commands export for better IDE support
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Find required packages
 find_package(open62541 REQUIRED)
@@ -41,10 +52,15 @@ target_link_libraries(opcua2http
 
 # Compiler-specific options
 if(MSVC)
-    target_compile_options(opcua2http PRIVATE /W4)
-    target_compile_definitions(opcua2http PRIVATE _WIN32_WINNT=0x0601)
+    target_compile_options(opcua2http PRIVATE /W4 /bigobj)
+    target_compile_definitions(opcua2http PRIVATE _WIN32_WINNT=0x0601 WIN32_LEAN_AND_MEAN NOMINMAX)
 else()
     target_compile_options(opcua2http PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Platform-specific definitions
+if(WIN32)
+    target_compile_definitions(opcua2http PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
 # Enable threading support
@@ -74,6 +90,7 @@ if(BUILD_TESTS)
         tests/unit/test_opcua_client.cpp
         tests/unit/test_opcua_log_bridge.cpp
         tests/unit/test_subscription_manager.cpp
+        tests/unit/test_reconnection_manager.cpp
         tests/unit/test_api_handler.cpp
         tests/unit/test_error_handler.cpp
         src/config/Configuration.cpp
@@ -107,10 +124,15 @@ if(BUILD_TESTS)
     
     # Compiler-specific options for tests
     if(MSVC)
-        target_compile_options(opcua2http_tests PRIVATE /W4)
-        target_compile_definitions(opcua2http_tests PRIVATE _WIN32_WINNT=0x0601)
+        target_compile_options(opcua2http_tests PRIVATE /W4 /bigobj)
+        target_compile_definitions(opcua2http_tests PRIVATE _WIN32_WINNT=0x0601 WIN32_LEAN_AND_MEAN NOMINMAX)
     else()
         target_compile_options(opcua2http_tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    
+    # Platform-specific definitions for tests
+    if(WIN32)
+        target_compile_definitions(opcua2http_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
     
     # Register tests with CTest

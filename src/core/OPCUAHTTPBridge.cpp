@@ -70,9 +70,7 @@ bool OPCUAHTTPBridge::initialize() {
 
 void OPCUAHTTPBridge::run() {
     ErrorHandler::executeWithErrorHandling([this]() {
-        if (!app_) {
-            throw std::runtime_error("HTTP server not initialized");
-        }
+        // HTTP server is now a direct member, always initialized
         
         running_.store(true);
         startTime_ = std::chrono::steady_clock::now();
@@ -127,7 +125,7 @@ void OPCUAHTTPBridge::run() {
         spdlog::info("✓ API endpoint available at: http://localhost:{}/iotgateway/read", config_->serverPort);
         
         // Start HTTP server (this blocks)
-        app_->port(static_cast<uint16_t>(config_->serverPort))
+        app_.port(static_cast<uint16_t>(config_->serverPort))
             .multithreaded()
             .run();
             
@@ -153,10 +151,8 @@ void OPCUAHTTPBridge::stop() {
     
     ErrorHandler::executeWithErrorHandling([this]() {
         // Stop HTTP server
-        if (app_) {
-            app_->stop();
-            spdlog::debug("HTTP server stopped");
-        }
+        app_.stop();
+        spdlog::debug("HTTP server stopped");
         
         // Stop reconnection monitoring
         if (reconnectionManager_) {
@@ -224,15 +220,15 @@ bool OPCUAHTTPBridge::initializeComponents() {
         
         // Initialize Cache Manager
         cacheManager_ = std::make_unique<CacheManager>(
-            std::chrono::minutes(config_->cacheExpireMinutes)
+            config_->cacheExpireMinutes
         );
         spdlog::debug("Cache manager initialized");
         
         // Initialize Subscription Manager
         subscriptionManager_ = std::make_unique<SubscriptionManager>(
-            opcClient_->getClient(), 
+            opcClient_.get(), 
             cacheManager_.get(),
-            std::chrono::minutes(config_->subscriptionCleanupMinutes)
+            config_->subscriptionCleanupMinutes
         );
         
         if (!subscriptionManager_->initializeSubscription()) {
@@ -266,11 +262,8 @@ bool OPCUAHTTPBridge::setupHTTPServer() {
     return ErrorHandler::executeWithErrorHandling([this]() {
         spdlog::info("Setting up HTTP server...");
         
-        // Create Crow application
-        app_ = std::make_unique<crow::SimpleApp>();
-        
         // Setup routes through API handler
-        apiHandler_->setupRoutes(*app_);
+        apiHandler_->setupRoutes(app_);
         
         spdlog::info("HTTP server routes configured");
         
@@ -321,7 +314,7 @@ void OPCUAHTTPBridge::cleanup() {
         opcClient_.reset();
         spdlog::debug("OPC UA client cleaned up");
         
-        app_.reset();
+        // HTTP server is now a direct member, no need to reset
         spdlog::debug("HTTP server cleaned up");
         
         config_.reset();
