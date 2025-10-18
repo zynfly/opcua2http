@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <future>
 
 namespace opcua2http {
 
@@ -81,8 +82,17 @@ void ReconnectionManager::stopMonitoring() {
     updateState(ReconnectionState::IDLE);
     
     if (monitorThread_.joinable()) {
-        monitorThread_.join();
-        logActivity("Connection monitoring thread stopped");
+        // Try to join with timeout to avoid hanging
+        auto future = std::async(std::launch::async, [this]() {
+            monitorThread_.join();
+        });
+        
+        if (future.wait_for(std::chrono::seconds(3)) == std::future_status::timeout) {
+            logActivity("Connection monitoring thread join timed out, detaching", true);
+            monitorThread_.detach();
+        } else {
+            logActivity("Connection monitoring thread stopped");
+        }
     }
 }
 

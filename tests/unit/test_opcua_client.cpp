@@ -85,7 +85,7 @@ TEST_F(OPCUAClientTest, ErrorHandling) {
 // Custom test with additional variables
 class CustomVariableTest : public OPCUATestBase {
 protected:
-    CustomVariableTest() : OPCUATestBase(0, false) {} // Don't use standard variables
+    CustomVariableTest() : OPCUATestBase(false) {} // Don't use standard variables
     
     void SetUp() override {
         OPCUATestBase::SetUp();

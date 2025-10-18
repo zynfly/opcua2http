@@ -46,6 +46,12 @@ public:
     void run();
     
     /**
+     * @brief Start the HTTP server in a separate thread (non-blocking)
+     * @return true if started successfully, false otherwise
+     */
+    bool startAsync();
+    
+    /**
      * @brief Stop the server and shutdown all components gracefully
      */
     void stop();

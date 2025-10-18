@@ -9,6 +9,7 @@
 #include <iostream>
 #include <csignal>
 #include <chrono>
+#include <future>
 #include <crow.h>
 
 namespace opcua2http {
@@ -25,6 +26,23 @@ OPCUAHTTPBridge::~OPCUAHTTPBridge() {
     if (running_.load()) {
         stop();
     }
+    
+    // Wait for server thread to finish
+    if (serverThread_.joinable()) {
+        spdlog::debug("Destructor waiting for server thread...");
+        
+        auto future = std::async(std::launch::async, [this]() {
+            serverThread_.join();
+        });
+        
+        if (future.wait_for(std::chrono::seconds(3)) == std::future_status::timeout) {
+            spdlog::warn("Destructor: Server thread did not join within timeout, detaching");
+            serverThread_.detach();
+        } else {
+            spdlog::debug("Destructor: Server thread joined successfully");
+        }
+    }
+    
     cleanup();
     instance_ = nullptr;
 }
@@ -92,7 +110,15 @@ void OPCUAHTTPBridge::run() {
             spdlog::debug("Cache cleanup thread started");
             
             while (running_.load()) {
-                std::this_thread::sleep_for(std::chrono::minutes(5)); // Cleanup every 5 minutes
+                // Sleep in small intervals to allow quick shutdown
+                auto cleanupInterval = std::chrono::minutes(5);
+                auto checkInterval = std::chrono::milliseconds(500);
+                auto elapsed = std::chrono::milliseconds(0);
+                
+                while (running_.load() && elapsed < cleanupInterval) {
+                    std::this_thread::sleep_for(checkInterval);
+                    elapsed += checkInterval;
+                }
                 
                 if (running_.load()) {
                     ErrorHandler::executeWithErrorHandling([this]() {
@@ -140,19 +166,47 @@ void OPCUAHTTPBridge::run() {
     spdlog::info("HTTP server stopped");
 }
 
+bool OPCUAHTTPBridge::startAsync() {
+    if (running_.load()) {
+        spdlog::warn("Bridge is already running");
+        return false;
+    }
+    
+    try {
+        // Start the server in a separate thread
+        serverThread_ = std::thread([this]() {
+            try {
+                run();
+            } catch (const std::exception& e) {
+                spdlog::error("Server thread error: {}", e.what());
+            }
+            spdlog::debug("Server thread exiting");
+        });
+        
+        // Wait a bit for the server to start
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        return running_.load();
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to start bridge async: {}", e.what());
+        return false;
+    }
+}
+
 void OPCUAHTTPBridge::stop() {
-    if (!running_.load()) {
+    // Use atomic flag to prevent multiple stops
+    bool expected = true;
+    if (!running_.compare_exchange_strong(expected, false)) {
+        spdlog::debug("Stop already called or not running");
         return;
     }
     
     spdlog::info("Stopping OPC UA HTTP Bridge...");
     
-    running_.store(false);
-    
     ErrorHandler::executeWithErrorHandling([this]() {
-        // Stop HTTP server
+        // Stop HTTP server first
         app_.stop();
-        spdlog::debug("HTTP server stopped");
+        spdlog::debug("HTTP server stop signal sent");
         
         // Stop reconnection monitoring
         if (reconnectionManager_) {
@@ -166,10 +220,21 @@ void OPCUAHTTPBridge::stop() {
             spdlog::debug("Cleanup thread joined");
         }
         
-        // Wait for server thread if it's running
+        // Wait for server thread if it's running (with timeout)
         if (serverThread_.joinable()) {
-            serverThread_.join();
-            spdlog::debug("Server thread joined");
+            spdlog::debug("Waiting for server thread to join...");
+            
+            // Try to join with timeout
+            auto future = std::async(std::launch::async, [this]() {
+                serverThread_.join();
+            });
+            
+            if (future.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
+                spdlog::warn("Server thread did not join within timeout, detaching");
+                serverThread_.detach();
+            } else {
+                spdlog::debug("Server thread joined successfully");
+            }
         }
         
     }, "Graceful shutdown");

@@ -1,36 +1,94 @@
 #include "OPCUATestBase.h"
 #include <chrono>
 #include <thread>
+#include <mutex>
 
 namespace opcua2http {
 namespace test {
 
-uint16_t OPCUATestBase::nextPort_ = 4840;
+// Static member initialization
+std::unique_ptr<MockOPCUAServer> OPCUATestBase::sharedMockServer_ = nullptr;
+std::mutex OPCUATestBase::serverMutex_;
+std::mutex OPCUATestBase::setupMutex_;
+bool OPCUATestBase::serverInitialized_ = false;
 
-OPCUATestBase::OPCUATestBase(uint16_t serverPort, bool useStandardVariables)
-    : serverPort_(serverPort == 0 ? getNextAvailablePort() : serverPort)
+OPCUATestBase::OPCUATestBase(bool useStandardVariables)
+    : mockServer_(nullptr)
     , useStandardVariables_(useStandardVariables) {
 }
 
-void OPCUATestBase::SetUp() {
-    // Create mock server with unique namespace
-    std::string namespaceName = "http://test.opcua.server.port" + std::to_string(serverPort_);
-    mockServer_ = std::make_unique<MockOPCUAServer>(serverPort_, namespaceName);
+void OPCUATestBase::initializeSharedMockServer() {
+    std::lock_guard<std::mutex> lock(serverMutex_);
     
-    // Add standard test variables if requested
-    if (useStandardVariables_) {
-        mockServer_->addStandardTestVariables();
+    if (!serverInitialized_) {
+        // Create shared mock server on fixed port
+        constexpr uint16_t SHARED_SERVER_PORT = 4840;
+        std::string namespaceName = "http://test.opcua.shared.server";
+        
+        sharedMockServer_ = std::make_unique<MockOPCUAServer>(SHARED_SERVER_PORT, namespaceName);
+        
+        // Disable verbose logging to reduce noise
+        sharedMockServer_->setVerboseLogging(false);
+        
+        // Add standard test variables
+        sharedMockServer_->addStandardTestVariables();
+        
+        // Start server
+        if (!sharedMockServer_->start()) {
+            throw std::runtime_error("Failed to start shared mock OPC UA server");
+        }
+        
+        serverInitialized_ = true;
     }
+}
+
+void OPCUATestBase::shutdownSharedMockServer() {
+    std::lock_guard<std::mutex> lock(serverMutex_);
     
-    // Start server
-    ASSERT_TRUE(mockServer_->start()) << "Failed to start mock OPC UA server on port " << serverPort_;
+    if (sharedMockServer_) {
+        sharedMockServer_->stop();
+        sharedMockServer_.reset();
+        serverInitialized_ = false;
+    }
+}
+
+MockOPCUAServer* OPCUATestBase::getSharedMockServer() {
+    std::lock_guard<std::mutex> lock(serverMutex_);
+    return sharedMockServer_.get();
+}
+
+void OPCUATestBase::SetUp() {
+    // Serialize SetUp calls to prevent concurrent access to shared MockServer
+    std::lock_guard<std::mutex> setupLock(setupMutex_);
+    
+    // Initialize shared server if not already done
+    initializeSharedMockServer();
+    
+    // Get reference to shared server
+    mockServer_ = getSharedMockServer();
+    ASSERT_NE(mockServer_, nullptr) << "Shared mock server not initialized";
+    
+    // Reset standard test variables to known state if requested
+    if (useStandardVariables_) {
+        UA_Variant intValue = TestValueFactory::createInt32(42);
+        mockServer_->updateTestVariable(1001, intValue);
+        UA_Variant_clear(&intValue);
+        
+        UA_Variant stringValue = TestValueFactory::createString("Hello World");
+        mockServer_->updateTestVariable(1002, stringValue);
+        UA_Variant_clear(&stringValue);
+        
+        UA_Variant boolValue = TestValueFactory::createBoolean(true);
+        mockServer_->updateTestVariable(1003, boolValue);
+        UA_Variant_clear(&boolValue);
+    }
     
     // Configure test settings
     config_.opcEndpoint = mockServer_->getEndpoint();
     config_.securityMode = 1; // None
     config_.securityPolicy = "None";
     config_.defaultNamespace = mockServer_->getTestNamespaceIndex();
-    config_.applicationUri = "urn:test:opcua:client:port" + std::to_string(serverPort_);
+    config_.applicationUri = "urn:test:opcua:client:shared";
     config_.connectionRetryMax = 3;
     config_.connectionInitialDelay = 100;
     config_.connectionMaxRetry = 5;
@@ -39,10 +97,16 @@ void OPCUATestBase::SetUp() {
 }
 
 void OPCUATestBase::TearDown() {
-    if (mockServer_) {
-        mockServer_->stop();
-        mockServer_.reset();
-    }
+    // Serialize TearDown to ensure clean disconnection before next test
+    std::lock_guard<std::mutex> setupLock(setupMutex_);
+    
+    // Don't stop the shared server, just clean up test-specific resources
+    mockServer_ = nullptr;
+    
+    // CRITICAL: Wait longer to ensure all OPC UA connections are fully closed
+    // The MockServer needs time to process disconnections and clean up sessions
+    // Without this delay, the next test may encounter corrupted server state
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
 }
 
 std::string OPCUATestBase::getTestNodeId(UA_UInt32 nodeId) const {
@@ -87,13 +151,9 @@ bool OPCUATestBase::waitForCondition(std::function<bool()> condition, int timeou
     }
 }
 
-uint16_t OPCUATestBase::getNextAvailablePort() {
-    return nextPort_++;
-}
-
 // SubscriptionTestBase implementation
-SubscriptionTestBase::SubscriptionTestBase(uint16_t serverPort)
-    : OPCUATestBase(serverPort, true) {
+SubscriptionTestBase::SubscriptionTestBase()
+    : OPCUATestBase(true) {
 }
 
 void SubscriptionTestBase::SetUp() {
@@ -122,8 +182,8 @@ void SubscriptionTestBase::updateVariableAndWait(UA_UInt32 nodeId, const UA_Vari
 }
 
 // PerformanceTestBase implementation
-PerformanceTestBase::PerformanceTestBase(uint16_t serverPort)
-    : OPCUATestBase(serverPort, false) { // Don't add standard variables for performance tests
+PerformanceTestBase::PerformanceTestBase()
+    : OPCUATestBase(false) { // Don't add standard variables for performance tests
 }
 
 void PerformanceTestBase::addPerformanceTestVariables(size_t count, UA_UInt32 startNodeId) {

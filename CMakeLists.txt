@@ -86,6 +86,7 @@ if(BUILD_TESTS)
     # Test source files
     set(TEST_SOURCES
         tests/test_main.cpp
+        # Unit tests
         tests/unit/test_cache_manager.cpp
         tests/unit/test_opcua_client.cpp
         tests/unit/test_opcua_log_bridge.cpp
@@ -93,9 +94,13 @@ if(BUILD_TESTS)
         tests/unit/test_reconnection_manager.cpp
         tests/unit/test_api_handler.cpp
         tests/unit/test_error_handler.cpp
+        # Integration tests
+        tests/integration/test_end_to_end.cpp
+        # Source files needed for tests
         src/config/Configuration.cpp
         src/core/ErrorHandler.cpp
         src/core/OPCUALogBridge.cpp
+        src/core/OPCUAHTTPBridge.cpp
         src/opcua/OPCUAClient.cpp
         src/cache/CacheManager.cpp
         src/subscription/SubscriptionManager.cpp

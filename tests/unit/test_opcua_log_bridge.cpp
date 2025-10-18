@@ -4,12 +4,16 @@
 #include "core/OPCUALogBridge.h"
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/ostream_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 
 using namespace opcua2http;
 
 class OPCUALogBridgeTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // Save the original logger
+        original_logger = spdlog::default_logger();
+        
         // Create a string stream to capture spdlog output
         log_stream = std::make_shared<std::ostringstream>();
         auto ostream_sink = std::make_shared<spdlog::sinks::ostream_sink_mt>(*log_stream);
@@ -21,12 +25,29 @@ protected:
     }
     
     void TearDown() override {
-        // Reset to default logger
-        spdlog::set_default_logger(spdlog::default_logger());
+        // Flush and reset test logger
+        if (test_logger) {
+            test_logger->flush();
+            test_logger.reset();
+        }
+        
+        // Restore the original logger
+        if (original_logger) {
+            spdlog::set_default_logger(original_logger);
+        } else {
+            // If no original logger, create a new default one
+            auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+            auto default_logger = std::make_shared<spdlog::logger>("default", console_sink);
+            spdlog::set_default_logger(default_logger);
+        }
+        
+        // Ensure the logger is valid
+        spdlog::set_level(spdlog::level::info);
     }
     
     std::shared_ptr<std::ostringstream> log_stream;
     std::shared_ptr<spdlog::logger> test_logger;
+    std::shared_ptr<spdlog::logger> original_logger;
     
     std::string getLogOutput() {
         test_logger->flush();

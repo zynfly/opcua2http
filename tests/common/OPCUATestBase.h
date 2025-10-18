@@ -16,16 +16,16 @@ namespace test {
  * @brief Base class for OPC UA tests
  * 
  * Provides common setup and teardown for tests that need a mock OPC UA server
- * and basic client configuration. Reduces boilerplate code across test files.
+ * and basic client configuration. Uses a shared global mock server to avoid
+ * port conflicts and improve test stability.
  */
 class OPCUATestBase : public ::testing::Test {
 protected:
     /**
      * @brief Constructor
-     * @param serverPort Port for mock server (default: auto-assign starting from 4840)
      * @param useStandardVariables Whether to add standard test variables (default: true)
      */
-    explicit OPCUATestBase(uint16_t serverPort = 0, bool useStandardVariables = true);
+    explicit OPCUATestBase(bool useStandardVariables = true);
     
     /**
      * @brief Virtual destructor
@@ -33,14 +33,31 @@ protected:
     virtual ~OPCUATestBase() = default;
     
     /**
-     * @brief Test setup - starts mock server and configures client
+     * @brief Test setup - initializes shared mock server and configures client
      */
     void SetUp() override;
     
     /**
-     * @brief Test teardown - stops server and cleans up
+     * @brief Test teardown - cleans up client resources
      */
     void TearDown() override;
+    
+public:
+    /**
+     * @brief Initialize the shared mock server (called once)
+     */
+    static void initializeSharedMockServer();
+    
+    /**
+     * @brief Shutdown the shared mock server (called once at end)
+     */
+    static void shutdownSharedMockServer();
+
+protected:
+    /**
+     * @brief Get the shared mock server instance
+     */
+    static MockOPCUAServer* getSharedMockServer();
     
     /**
      * @brief Get a formatted node ID string for the test namespace
@@ -77,15 +94,15 @@ protected:
     bool waitForCondition(std::function<bool()> condition, int timeoutMs = 1000, int checkIntervalMs = 10);
     
     // Protected members accessible to derived classes
-    std::unique_ptr<MockOPCUAServer> mockServer_;
+    MockOPCUAServer* mockServer_; // Pointer to shared server
     Configuration config_;
     
 private:
-    static uint16_t getNextAvailablePort();
-    
-    uint16_t serverPort_;
     bool useStandardVariables_;
-    static uint16_t nextPort_;
+    static std::unique_ptr<MockOPCUAServer> sharedMockServer_;
+    static std::mutex serverMutex_;
+    static std::mutex setupMutex_;  // Mutex to serialize test SetUp calls
+    static bool serverInitialized_;
 };
 
 /**
@@ -96,7 +113,7 @@ private:
  */
 class SubscriptionTestBase : public OPCUATestBase {
 protected:
-    explicit SubscriptionTestBase(uint16_t serverPort = 0);
+    explicit SubscriptionTestBase();
     
     void SetUp() override;
     
@@ -118,7 +135,7 @@ protected:
  */
 class PerformanceTestBase : public OPCUATestBase {
 protected:
-    explicit PerformanceTestBase(uint16_t serverPort = 0);
+    explicit PerformanceTestBase();
     
     /**
      * @brief Measure execution time of a function

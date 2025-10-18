@@ -5,6 +5,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cstring>
+#include <thread>
 
 namespace opcua2http {
 
@@ -17,7 +18,10 @@ SubscriptionManager::SubscriptionManager(OPCUAClient* opcClient, CacheManager* c
     , itemExpireTime_(itemExpireMinutes)
     , autoCleanupEnabled_(true)
     , detailedLoggingEnabled_(true)
+    , totalNotifications_(0)
+    , totalErrors_(0)
     , creationTime_(std::chrono::steady_clock::now())
+    , lastActivity_(std::chrono::steady_clock::now())
 {
     if (!opcClient_) {
         throw std::invalid_argument("OPCUAClient cannot be null");
@@ -26,13 +30,32 @@ SubscriptionManager::SubscriptionManager(OPCUAClient* opcClient, CacheManager* c
         throw std::invalid_argument("CacheManager cannot be null");
     }
     
-    lastActivity_.store(creationTime_);
     logActivity("SubscriptionManager created");
 }
 
 SubscriptionManager::~SubscriptionManager() {
     logActivity("SubscriptionManager destructor called");
+    
+    // First, mark as inactive to prevent new operations
+    subscriptionActive_.store(false);
+    
+    // Clear all monitored items and subscription
     clearAllMonitoredItems();
+    
+    // Additional safety: ensure subscription is deleted from client
+    if (subscriptionId_ != 0 && opcClient_ && opcClient_->isConnected()) {
+        UA_Client* client = opcClient_->getClient();
+        if (client) {
+            UA_Client_Subscriptions_deleteSingle(client, subscriptionId_);
+        }
+    }
+    
+    // Reset subscription ID to prevent any further use
+    subscriptionId_ = 0;
+    
+    // Small delay to ensure any pending callbacks complete
+    // This is a safety measure to prevent race conditions during destruction
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 
 bool SubscriptionManager::initializeSubscription() {
@@ -384,7 +407,7 @@ SubscriptionManager::SubscriptionStats SubscriptionManager::getStats() const {
     stats.totalNotifications = totalNotifications_.load();
     stats.totalErrors = totalErrors_.load();
     stats.creationTime = creationTime_;
-    stats.lastActivity = lastActivity_.load();
+    stats.lastActivity = lastActivity_; // No longer atomic, protected by mutex
     stats.isSubscriptionActive = subscriptionActive_.load();
     
     return stats;
@@ -395,10 +418,23 @@ bool SubscriptionManager::clearAllMonitoredItems() {
     
     logActivity("Clearing all monitored items");
     
+    // First mark as inactive to prevent callbacks
+    subscriptionActive_.store(false);
+    
     // Delete all monitored items
-    for (const auto& pair : monitoredItems_) {
-        deleteMonitoredItem(pair.second.monitoredItemId);
-        cacheManager_->setSubscriptionStatus(pair.first, false);
+    if (opcClient_ && opcClient_->isConnected()) {
+        UA_Client* client = opcClient_->getClient();
+        if (client && subscriptionId_ != 0) {
+            for (const auto& pair : monitoredItems_) {
+                deleteMonitoredItem(pair.second.monitoredItemId);
+                if (cacheManager_) {
+                    cacheManager_->setSubscriptionStatus(pair.first, false);
+                }
+            }
+            
+            // Delete the subscription itself
+            UA_Client_Subscriptions_deleteSingle(client, subscriptionId_);
+        }
     }
     
     // Clear tracking
@@ -407,7 +443,6 @@ bool SubscriptionManager::clearAllMonitoredItems() {
     
     // Reset subscription
     subscriptionId_ = 0;
-    subscriptionActive_.store(false);
     
     logActivity("All monitored items cleared");
     updateActivity();
@@ -489,8 +524,8 @@ std::string SubscriptionManager::getDetailedStatus() const {
     auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - creationTime_);
     oss << "Uptime: " << uptime.count() << " seconds\n";
     
-    auto lastActivity = lastActivity_.load();
-    auto timeSinceActivity = std::chrono::duration_cast<std::chrono::seconds>(now - lastActivity);
+    // lastActivity_ is already protected by the mutex held at function entry
+    auto timeSinceActivity = std::chrono::duration_cast<std::chrono::seconds>(now - lastActivity_);
     oss << "Time Since Last Activity: " << timeSinceActivity.count() << " seconds\n";
     
     if (!monitoredItems_.empty()) {
@@ -535,7 +570,17 @@ void SubscriptionManager::dataChangeNotificationCallback(UA_Client *client, UA_U
     }
     
     SubscriptionManager* manager = static_cast<SubscriptionManager*>(subContext);
-    manager->handleDataChangeNotification(monId, value);
+    
+    // Safety check: ensure the manager is still valid and active
+    try {
+        if (!manager->subscriptionActive_.load()) {
+            return; // Manager is being destroyed or inactive
+        }
+        manager->handleDataChangeNotification(monId, value);
+    } catch (...) {
+        // Ignore any exceptions during destruction
+        return;
+    }
 }
 
 void SubscriptionManager::subscriptionInactivityCallback(UA_Client *client, UA_UInt32 subId, 
@@ -548,7 +593,18 @@ void SubscriptionManager::subscriptionInactivityCallback(UA_Client *client, UA_U
     }
     
     SubscriptionManager* manager = static_cast<SubscriptionManager*>(subContext);
-    manager->handleSubscriptionInactivity();
+    
+    // Safety check: ensure the manager is still valid
+    try {
+        // Check if manager is still active before accessing its members
+        if (!manager || manager->subscriptionId_ == 0 || !manager->subscriptionActive_.load()) {
+            return; // Manager is being destroyed or inactive
+        }
+        manager->handleSubscriptionInactivity();
+    } catch (...) {
+        // Ignore any exceptions during destruction - object may be partially destroyed
+        return;
+    }
 }
 
 void SubscriptionManager::subscriptionStatusChangeCallback(UA_Client *client, UA_UInt32 subId, 
@@ -561,7 +617,18 @@ void SubscriptionManager::subscriptionStatusChangeCallback(UA_Client *client, UA
     }
     
     SubscriptionManager* manager = static_cast<SubscriptionManager*>(subContext);
-    manager->handleSubscriptionStatusChange(notification);
+    
+    // Safety check: ensure the manager is still valid
+    try {
+        // Check if manager is still active before accessing its members
+        if (!manager || manager->subscriptionId_ == 0 || !manager->subscriptionActive_.load()) {
+            return; // Manager is being destroyed or inactive
+        }
+        manager->handleSubscriptionStatusChange(notification);
+    } catch (...) {
+        // Ignore any exceptions during destruction - object may be partially destroyed
+        return;
+    }
 }
 
 // Private methods
@@ -889,7 +956,9 @@ void SubscriptionManager::logActivity(const std::string& message, bool isError) 
 }
 
 void SubscriptionManager::updateActivity() const {
-    lastActivity_.store(std::chrono::steady_clock::now());
+    // Note: This assumes mutex is already held by the caller
+    // If called from const methods, we need to cast away const for the mutex
+    const_cast<SubscriptionManager*>(this)->lastActivity_ = std::chrono::steady_clock::now();
 }
 
 bool SubscriptionManager::validateNodeId(const std::string& nodeId) const {

@@ -268,10 +268,10 @@ private:
     std::atomic<bool> detailedLoggingEnabled_;               // Whether detailed logging is enabled
     
     // Statistics (atomic for thread-safe access)
-    mutable std::atomic<uint64_t> totalNotifications_{0};   // Total notifications received
-    mutable std::atomic<uint64_t> totalErrors_{0};          // Total errors encountered
+    mutable std::atomic<uint64_t> totalNotifications_;      // Total notifications received
+    mutable std::atomic<uint64_t> totalErrors_;             // Total errors encountered
     std::chrono::steady_clock::time_point creationTime_;    // Manager creation time
-    mutable std::atomic<std::chrono::steady_clock::time_point> lastActivity_; // Last activity time
+    mutable std::chrono::steady_clock::time_point lastActivity_; // Last activity time (protected by mutex)
     
     // Private methods
     
