@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(open62541 REQUIRED)
 find_package(Crow REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(spdlog REQUIRED)
 
 # Include directories
 include_directories(include)
@@ -17,6 +18,8 @@ set(SOURCES
     main.cpp
     src/config/Configuration.cpp
     src/core/OPCUAHTTPBridge.cpp
+    src/core/ErrorHandler.cpp
+    src/core/OPCUALogBridge.cpp
     src/opcua/OPCUAClient.cpp
     src/cache/CacheManager.cpp
     src/subscription/SubscriptionManager.cpp
@@ -33,6 +36,7 @@ target_link_libraries(opcua2http
     open62541::open62541
     Crow::Crow
     nlohmann_json::nlohmann_json
+    spdlog::spdlog
 )
 
 # Compiler-specific options
@@ -68,9 +72,13 @@ if(BUILD_TESTS)
         tests/test_main.cpp
         tests/unit/test_cache_manager.cpp
         tests/unit/test_opcua_client.cpp
+        tests/unit/test_opcua_log_bridge.cpp
         tests/unit/test_subscription_manager.cpp
         tests/unit/test_api_handler.cpp
+        tests/unit/test_error_handler.cpp
         src/config/Configuration.cpp
+        src/core/ErrorHandler.cpp
+        src/core/OPCUALogBridge.cpp
         src/opcua/OPCUAClient.cpp
         src/cache/CacheManager.cpp
         src/subscription/SubscriptionManager.cpp
@@ -88,6 +96,7 @@ if(BUILD_TESTS)
         open62541::open62541
         Crow::Crow
         nlohmann_json::nlohmann_json
+        spdlog::spdlog
         GTest::gtest
         GTest::gmock
         Threads::Threads

@@ -5,6 +5,7 @@
     "open62541",
     "nlohmann-json",
     "crow",
-    "gtest"
+    "gtest",
+    "spdlog"
   ]
 }

@@ -5,7 +5,19 @@
 #include <thread>
 #include "config/Configuration.h"
 
+// Forward declarations
+namespace crow {
+    class SimpleApp;
+}
+
 namespace opcua2http {
+
+// Forward declarations
+class OPCUAClient;
+class CacheManager;
+class SubscriptionManager;
+class ReconnectionManager;
+class APIHandler;
 
 /**
  * @brief Main application class for the OPC UA HTTP Bridge
@@ -42,6 +54,12 @@ public:
     void stop();
     
     /**
+     * @brief Get runtime statistics for monitoring
+     * @return JSON string with current system status
+     */
+    std::string getStatus() const;
+    
+    /**
      * @brief Check if the application is currently running
      * @return true if running, false otherwise
      */
@@ -54,15 +72,24 @@ public:
     const Configuration& getConfiguration() const { return *config_; }
     
 private:
-    // Core components
+    // Configuration
     std::unique_ptr<Configuration> config_;
     
-    // Crow HTTP application (using void* to avoid forward declaration issues)
-    void* app_;
+    // Core components
+    std::unique_ptr<OPCUAClient> opcClient_;
+    std::unique_ptr<CacheManager> cacheManager_;
+    std::unique_ptr<SubscriptionManager> subscriptionManager_;
+    std::unique_ptr<ReconnectionManager> reconnectionManager_;
+    std::unique_ptr<APIHandler> apiHandler_;
+    
+    // Crow HTTP application
+    std::unique_ptr<crow::SimpleApp> app_;
     
     // Runtime state
     std::atomic<bool> running_;
     std::thread serverThread_;
+    std::thread cleanupThread_;
+    std::chrono::steady_clock::time_point startTime_;
     
     // Initialization methods
     bool initializeConfiguration();

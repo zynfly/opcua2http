@@ -1,4 +1,5 @@
 #include "opcua/OPCUAClient.h"
+#include <spdlog/spdlog.h>
 #include <iostream>
 #include <sstream>
 #include <regex>
@@ -27,7 +28,7 @@ bool OPCUAClient::initialize(const Configuration& config) {
     std::lock_guard<std::mutex> lock(clientMutex_);
     
     if (initialized_) {
-        std::cerr << "OPCUAClient already initialized" << std::endl;
+        spdlog::error("OPCUAClient already initialized");
         return false;
     }
     
@@ -35,19 +36,19 @@ bool OPCUAClient::initialize(const Configuration& config) {
     endpoint_ = config.opcEndpoint;
     
     if (endpoint_.empty()) {
-        std::cerr << "OPC UA endpoint is empty" << std::endl;
+        spdlog::error("OPC UA endpoint is empty");
         return false;
     }
     
     client_ = UA_Client_new();
     if (!client_) {
-        std::cerr << "Failed to create UA_Client" << std::endl;
+        spdlog::error("Failed to create UA_Client");
         return false;
     }
     
     config_ = UA_Client_getConfig(client_);
     if (!config_) {
-        std::cerr << "Failed to get client configuration" << std::endl;
+        spdlog::error("Failed to get client configuration");
         UA_Client_delete(client_);
         client_ = nullptr;
         return false;
@@ -55,15 +56,16 @@ bool OPCUAClient::initialize(const Configuration& config) {
     
     UA_StatusCode status = UA_ClientConfig_setDefault(config_);
     if (status != UA_STATUSCODE_GOOD) {
-        std::cerr << "Failed to set default client configuration: " 
-                  << statusCodeToString(status) << std::endl;
+        spdlog::error("Failed to set default client configuration: {}", statusCodeToString(status));
         UA_Client_delete(client_);
         client_ = nullptr;
         return false;
     }
     
+    // Note: OPC UA logging integration will be added later
+    
     if (!configureClientSecurity()) {
-        std::cerr << "Failed to configure client security" << std::endl;
+        spdlog::error("Failed to configure client security");
         UA_Client_delete(client_);
         client_ = nullptr;
         return false;
@@ -76,7 +78,7 @@ bool OPCUAClient::initialize(const Configuration& config) {
     initialized_ = true;
     updateConnectionState(ConnectionState::DISCONNECTED);
     
-    std::cout << "OPCUAClient initialized successfully for endpoint: " << endpoint_ << std::endl;
+    spdlog::info("OPCUAClient initialized successfully for endpoint: {}", endpoint_);
     return true;
 }
 
@@ -84,7 +86,7 @@ bool OPCUAClient::connect() {
     std::lock_guard<std::mutex> lock(clientMutex_);
     
     if (!initialized_) {
-        std::cerr << "Client not initialized" << std::endl;
+        spdlog::error("Client not initialized");
         return false;
     }
     
@@ -95,18 +97,17 @@ bool OPCUAClient::connect() {
     updateConnectionState(ConnectionState::CONNECTING);
     lastConnectionAttempt_ = std::chrono::steady_clock::now();
     
-    std::cout << "Connecting to OPC UA server: " << endpoint_ << std::endl;
+    spdlog::info("Connecting to OPC UA server: {}", endpoint_);
     
     UA_StatusCode status = UA_Client_connect(client_, endpoint_.c_str());
     
     if (status == UA_STATUSCODE_GOOD) {
         updateConnectionState(ConnectionState::CONNECTED);
-        std::cout << "Successfully connected to OPC UA server" << std::endl;
+        spdlog::info("Successfully connected to OPC UA server");
         return true;
     } else {
         updateConnectionState(ConnectionState::CONNECTION_ERROR, status);
-        std::cerr << "Failed to connect to OPC UA server: " 
-                  << statusCodeToString(status) << std::endl;
+        spdlog::error("Failed to connect to OPC UA server: {}", statusCodeToString(status));
         return false;
     }
 }
@@ -121,7 +122,7 @@ void OPCUAClient::disconnect() {
     if (connectionState_ == ConnectionState::CONNECTED || 
         connectionState_ == ConnectionState::CONNECTING) {
         
-        std::cout << "Disconnecting from OPC UA server" << std::endl;
+        spdlog::info("Disconnecting from OPC UA server");
         UA_Client_disconnect(client_);
         updateConnectionState(ConnectionState::DISCONNECTED);
     }
@@ -264,8 +265,7 @@ UA_NodeId OPCUAClient::parseNodeId(const std::string& nodeIdStr) {
     UA_StatusCode status = UA_NodeId_parse(&nodeId, UA_STRING((char*)nodeIdStr.c_str()));
     
     if (status != UA_STATUSCODE_GOOD) {
-        std::cerr << "Failed to parse NodeId: " << nodeIdStr 
-                  << " - " << statusCodeToString(status) << std::endl;
+        spdlog::error("Failed to parse NodeId: {} - {}", nodeIdStr, statusCodeToString(status));
         UA_NodeId_init(&nodeId);
     }
     
@@ -389,8 +389,7 @@ bool OPCUAClient::configureClientSecurity() {
             break;
         default:
             config_->securityMode = UA_MESSAGESECURITYMODE_NONE;
-            std::cout << "Unknown security mode " << appConfig_.securityMode 
-                      << ", using None" << std::endl;
+            spdlog::warn("Unknown security mode {}, using None", appConfig_.securityMode);
             break;
     }
     
@@ -400,8 +399,7 @@ bool OPCUAClient::configureClientSecurity() {
             UA_STRING_ALLOC(appConfig_.applicationUri.c_str());
     }
     
-    std::cout << "Security configured - Mode: " << appConfig_.securityMode 
-              << ", Policy: " << appConfig_.securityPolicy << std::endl;
+    spdlog::info("Security configured - Mode: {}, Policy: {}", appConfig_.securityMode, appConfig_.securityPolicy);
     
     return true;
 }
@@ -410,31 +408,29 @@ void OPCUAClient::updateConnectionState(ConnectionState newState, UA_StatusCode 
     ConnectionState oldState = connectionState_.exchange(newState);
     
     if (oldState != newState) {
-        std::cout << "Connection state changed: ";
+        std::string oldStateStr, newStateStr;
         
         switch (oldState) {
-            case ConnectionState::DISCONNECTED: std::cout << "DISCONNECTED"; break;
-            case ConnectionState::CONNECTING: std::cout << "CONNECTING"; break;
-            case ConnectionState::CONNECTED: std::cout << "CONNECTED"; break;
-            case ConnectionState::RECONNECTING: std::cout << "RECONNECTING"; break;
-            case ConnectionState::CONNECTION_ERROR: std::cout << "CONNECTION_ERROR"; break;
+            case ConnectionState::DISCONNECTED: oldStateStr = "DISCONNECTED"; break;
+            case ConnectionState::CONNECTING: oldStateStr = "CONNECTING"; break;
+            case ConnectionState::CONNECTED: oldStateStr = "CONNECTED"; break;
+            case ConnectionState::RECONNECTING: oldStateStr = "RECONNECTING"; break;
+            case ConnectionState::CONNECTION_ERROR: oldStateStr = "CONNECTION_ERROR"; break;
         }
         
-        std::cout << " -> ";
-        
         switch (newState) {
-            case ConnectionState::DISCONNECTED: std::cout << "DISCONNECTED"; break;
-            case ConnectionState::CONNECTING: std::cout << "CONNECTING"; break;
-            case ConnectionState::CONNECTED: std::cout << "CONNECTED"; break;
-            case ConnectionState::RECONNECTING: std::cout << "RECONNECTING"; break;
-            case ConnectionState::CONNECTION_ERROR: std::cout << "CONNECTION_ERROR"; break;
+            case ConnectionState::DISCONNECTED: newStateStr = "DISCONNECTED"; break;
+            case ConnectionState::CONNECTING: newStateStr = "CONNECTING"; break;
+            case ConnectionState::CONNECTED: newStateStr = "CONNECTED"; break;
+            case ConnectionState::RECONNECTING: newStateStr = "RECONNECTING"; break;
+            case ConnectionState::CONNECTION_ERROR: newStateStr = "CONNECTION_ERROR"; break;
         }
         
         if (statusCode != UA_STATUSCODE_GOOD) {
-            std::cout << " (Status: " << statusCodeToString(statusCode) << ")";
+            spdlog::info("Connection state changed: {} -> {} (Status: {})", oldStateStr, newStateStr, statusCodeToString(statusCode));
+        } else {
+            spdlog::info("Connection state changed: {} -> {}", oldStateStr, newStateStr);
         }
-        
-        std::cout << std::endl;
         
         if (stateChangeCallback_) {
             stateChangeCallback_(newState, statusCode);
