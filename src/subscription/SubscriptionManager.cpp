@@ -899,30 +899,47 @@ ReadResult SubscriptionManager::convertDataValueToReadResult(const std::string& 
         return ReadResult::createError(nodeId, "No value present");
     }
     
-    // Convert value to string
+    // Convert value to string using the same logic as OPCUAClient
     std::string valueStr;
     const UA_Variant* variant = &value->value;
     
     if (UA_Variant_isEmpty(variant)) {
         valueStr = "";
-    } else if (variant->type == &UA_TYPES[UA_TYPES_INT32]) {
-        UA_Int32* intValue = static_cast<UA_Int32*>(variant->data);
-        valueStr = std::to_string(*intValue);
-    } else if (variant->type == &UA_TYPES[UA_TYPES_STRING]) {
-        UA_String* stringValue = static_cast<UA_String*>(variant->data);
-        valueStr = std::string(reinterpret_cast<char*>(stringValue->data), stringValue->length);
     } else if (variant->type == &UA_TYPES[UA_TYPES_BOOLEAN]) {
         UA_Boolean* boolValue = static_cast<UA_Boolean*>(variant->data);
         valueStr = *boolValue ? "true" : "false";
-    } else if (variant->type == &UA_TYPES[UA_TYPES_DOUBLE]) {
-        UA_Double* doubleValue = static_cast<UA_Double*>(variant->data);
-        valueStr = std::to_string(*doubleValue);
+    } else if (variant->type == &UA_TYPES[UA_TYPES_INT32]) {
+        UA_Int32* intValue = static_cast<UA_Int32*>(variant->data);
+        valueStr = std::to_string(*intValue);
+    } else if (variant->type == &UA_TYPES[UA_TYPES_UINT32]) {
+        UA_UInt32* uintValue = static_cast<UA_UInt32*>(variant->data);
+        valueStr = std::to_string(*uintValue);
+    } else if (variant->type == &UA_TYPES[UA_TYPES_INT64]) {
+        UA_Int64* int64Value = static_cast<UA_Int64*>(variant->data);
+        valueStr = std::to_string(*int64Value);
+    } else if (variant->type == &UA_TYPES[UA_TYPES_UINT64]) {
+        UA_UInt64* uint64Value = static_cast<UA_UInt64*>(variant->data);
+        valueStr = std::to_string(*uint64Value);
     } else if (variant->type == &UA_TYPES[UA_TYPES_FLOAT]) {
         UA_Float* floatValue = static_cast<UA_Float*>(variant->data);
         valueStr = std::to_string(*floatValue);
+    } else if (variant->type == &UA_TYPES[UA_TYPES_DOUBLE]) {
+        UA_Double* doubleValue = static_cast<UA_Double*>(variant->data);
+        valueStr = std::to_string(*doubleValue);
+    } else if (variant->type == &UA_TYPES[UA_TYPES_STRING]) {
+        UA_String* stringValue = static_cast<UA_String*>(variant->data);
+        if (stringValue->data && stringValue->length > 0) {
+            valueStr = std::string(reinterpret_cast<char*>(stringValue->data), stringValue->length);
+        } else {
+            valueStr = "";
+        }
+    } else if (variant->type == &UA_TYPES[UA_TYPES_DATETIME]) {
+        UA_DateTime* dateTimeValue = static_cast<UA_DateTime*>(variant->data);
+        uint64_t timestamp = static_cast<uint64_t>((*dateTimeValue - UA_DATETIME_UNIX_EPOCH) / UA_DATETIME_MSEC);
+        valueStr = std::to_string(timestamp);
     } else {
         // For other types, use a generic representation
-        valueStr = "[Unsupported type: " + std::string(variant->type->typeName) + "]";
+        valueStr = std::string("Unsupported type: ") + variant->type->typeName;
     }
     
     // Get timestamp

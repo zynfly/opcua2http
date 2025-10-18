@@ -391,97 +391,68 @@ std::vector<ReadResult> APIHandler::processNodeRequests(const std::vector<std::s
     std::vector<ReadResult> results;
     results.reserve(nodeIds.size());
     
-    // Separate cached and non-cached nodes for batch processing
-    std::vector<std::string> cachedNodes;
-    std::vector<std::string> nonCachedNodes;
-    std::vector<size_t> originalIndices;
+    // Build results in order, collecting non-cached nodes for batch processing
+    std::vector<std::pair<std::string, size_t>> nonCachedNodes; // {nodeId, resultIndex}
     
-    // First pass: check cache for all nodes
-    for (size_t i = 0; i < nodeIds.size(); ++i) {
-        const auto& nodeId = nodeIds[i];
+    for (const auto& nodeId : nodeIds) {
         auto cachedEntry = cacheManager_->getCachedValue(nodeId);
         
         if (cachedEntry.has_value()) {
-            // Node is in cache
-            cachedNodes.push_back(nodeId);
+            // Use cached result
             results.push_back(cachedEntry->toReadResult());
-            originalIndices.push_back(i);
             cacheHits_++;
-            
-            // Update last accessed time for subscription management
             subscriptionManager_->updateLastAccessed(nodeId);
             
             if (detailedLoggingEnabled_) {
                 std::cout << "Cache hit for node: " << nodeId << std::endl;
             }
         } else {
-            // Node not in cache, needs OPC UA read
-            nonCachedNodes.push_back(nodeId);
-            originalIndices.push_back(i);
+            // Mark for OPC UA read - store nodeId and its position in results
+            nonCachedNodes.emplace_back(nodeId, results.size());
+            results.emplace_back(); // Placeholder - will be filled later
             cacheMisses_++;
         }
     }
     
-    // Second pass: batch read non-cached nodes from OPC UA server
+    // Batch read non-cached nodes and fill placeholders
     if (!nonCachedNodes.empty()) {
         if (detailedLoggingEnabled_) {
-            std::cout << "Reading " << nonCachedNodes.size() 
-                      << " nodes from OPC UA server" << std::endl;
+            std::cout << "Reading " << nonCachedNodes.size() << " nodes from OPC UA server" << std::endl;
         }
         
-        // Use batch read for better performance
-        std::vector<ReadResult> opcResults = opcClient_->readNodes(nonCachedNodes);
+        // Extract node IDs for batch read
+        std::vector<std::string> nodeIdsToRead;
+        nodeIdsToRead.reserve(nonCachedNodes.size());
+        for (const auto& pair : nonCachedNodes) {
+            nodeIdsToRead.push_back(pair.first);
+        }
         
-        // Process each OPC UA result
-        for (size_t i = 0; i < opcResults.size() && i < nonCachedNodes.size(); ++i) {
-            const auto& nodeId = nonCachedNodes[i];
-            const auto& result = opcResults[i];
+        // Batch read from OPC UA
+        auto opcResults = opcClient_->readNodes(nodeIdsToRead);
+        
+        // Fill placeholders with actual results
+        for (size_t i = 0; i < nonCachedNodes.size(); ++i) {
+            const auto& nodeId = nonCachedNodes[i].first;
+            size_t resultIndex = nonCachedNodes[i].second;
             
-            // Add to cache
-            cacheManager_->addCacheEntry(result, false);
+            ReadResult result = (i < opcResults.size()) ? 
+                opcResults[i] : 
+                ReadResult::createError(nodeId, "Failed to read from OPC UA server", getCurrentTimestamp());
             
-            // Create subscription for successful reads
-            if (result.success) {
-                bool subscriptionCreated = subscriptionManager_->addMonitoredItem(nodeId);
-                if (subscriptionCreated) {
-                    // Update cache to indicate subscription exists
-                    cacheManager_->setSubscriptionStatus(nodeId, true);
-                    
-                    if (detailedLoggingEnabled_) {
-                        std::cout << "Created subscription for node: " << nodeId << std::endl;
-                    }
-                } else {
-                    std::cerr << "Failed to create subscription for node: " << nodeId << std::endl;
+            // Create subscription for successful reads (but don't cache the read result)
+            // Cache will be updated only when subscription receives data change notifications
+            if (result.success && subscriptionManager_->addMonitoredItem(nodeId)) {
+                if (detailedLoggingEnabled_) {
+                    std::cout << "Created subscription for node: " << nodeId << std::endl;
                 }
             }
             
-            results.push_back(result);
+            // Fill the placeholder
+            results[resultIndex] = std::move(result);
         }
     }
     
-    // Third pass: reorder results to match original request order
-    std::vector<ReadResult> orderedResults(nodeIds.size());
-    size_t cachedIndex = 0;
-    size_t nonCachedIndex = cachedNodes.size();
-    
-    for (size_t i = 0; i < nodeIds.size(); ++i) {
-        const auto& nodeId = nodeIds[i];
-        auto cachedEntry = cacheManager_->getCachedValue(nodeId);
-        
-        if (cachedEntry.has_value()) {
-            orderedResults[i] = results[cachedIndex++];
-        } else {
-            if (nonCachedIndex < results.size()) {
-                orderedResults[i] = results[nonCachedIndex++];
-            } else {
-                // Fallback for error cases
-                orderedResults[i] = ReadResult::createError(nodeId, 
-                    "Failed to read from OPC UA server", getCurrentTimestamp());
-            }
-        }
-    }
-    
-    return orderedResults;
+    return results;
 }
 
 ReadResult APIHandler::processNodeRequest(const std::string& nodeId, bool& cacheHit) {
@@ -517,24 +488,17 @@ ReadResult APIHandler::processNodeRequest(const std::string& nodeId, bool& cache
         // Not in cache, need to read from OPC UA server
         ReadResult result = opcClient_->readNode(nodeId);
         
-        // Add to cache
-        cacheManager_->addCacheEntry(result, false);
-        
         // Create subscription for future updates (if successful read)
+        // Note: We don't cache the initial read result - cache will be updated by subscription notifications
         if (result.success) {
             bool subscriptionCreated = subscriptionManager_->addMonitoredItem(nodeId);
             if (subscriptionCreated) {
-                // Update cache to indicate subscription exists
-                cacheManager_->setSubscriptionStatus(nodeId, true);
-                
                 if (detailedLoggingEnabled_) {
                     std::cout << "Created subscription for new node: " << nodeId << std::endl;
                 }
             } else {
                 std::cerr << "Failed to create subscription for node: " << nodeId << std::endl;
                 
-                // Even if subscription creation failed, we still have the read result
-                // Log the issue but don't fail the request
                 if (detailedLoggingEnabled_) {
                     std::cout << "Continuing without subscription for node: " << nodeId << std::endl;
                 }
