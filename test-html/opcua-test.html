@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OPC UA HTTP Bridge - CORS Test (Offline)</title>
+    <script src="assets/tailwind.min.js"></script>
+    <script defer src="assets/alpine.min.js"></script>
+</head>
+
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8" x-data="opcuaTest()">
+        <div class="max-w-4xl mx-auto">
+            <!-- Header -->
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <h1 class="text-3xl font-bold text-gray-800 mb-2">OPC UA HTTP Bridge - CORS Test (Offline)</h1>
+                <p class="text-gray-600">Testing cross-origin requests to the OPC UA HTTP Bridge API - Offline Version</p>
+            </div>
+
+            <!-- Configuration -->
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <h2 class="text-xl font-semibold text-gray-800 mb-4">Configuration</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">API Endpoint</label>
+                        <input type="text" x-model="apiEndpoint"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Node IDs</label>
+                        <div class="space-y-2">
+                            <template x-for="(nodeId, index) in nodeIdList" :key="index">
+                                <div class="flex items-center gap-2">
+                                    <input type="text" x-model="nodeIdList[index]"
+                                        class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        placeholder="e.g., ns=25;i=59524">
+                                    <button @click="removeNodeId(index)"
+                                        class="px-3 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 text-sm">
+                                        Remove
+                                    </button>
+                                </div>
+                            </template>
+                            <button @click="addNodeId()"
+                                class="w-full px-3 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 text-sm">
+                                + Add Node ID
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Test Buttons -->
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <h2 class="text-xl font-semibold text-gray-800 mb-4">Test Actions</h2>
+                <div class="flex flex-wrap gap-4">
+                    <button @click="testHealth()" :disabled="loading"
+                        class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <span x-show="!loading">Test Health Endpoint</span>
+                        <span x-show="loading">Testing...</span>
+                    </button>
+
+                    <button @click="testSingleNode()" :disabled="loading"
+                        class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <span x-show="!loading">Test First Node</span>
+                        <span x-show="loading">Testing...</span>
+                    </button>
+
+                    <button @click="testAllNodes()" :disabled="loading"
+                        class="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <span x-show="!loading" x-text="'Test All Nodes (' + nodeIdList.length + ')'"></span>
+                        <span x-show="loading">Testing...</span>
+                    </button>
+
+                    <button @click="toggleAutoRefresh()"
+                        :class="autoRefresh ? 'bg-orange-600 hover:bg-orange-700' : 'bg-indigo-600 hover:bg-indigo-700'"
+                        class="px-4 py-2 text-white rounded-md">
+                        <span x-text="autoRefresh ? 'Stop Auto Refresh' : 'Start Auto Refresh'"></span>
+                        <span x-show="autoRefresh" class="ml-1 text-xs">(<span x-text="countdown"></span>s)</span>
+                    </button>
+
+                    <button @click="clearResults()"
+                        class="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700">
+                        Clear Results
+                    </button>
+                </div>
+            </div>
+
+            <!-- Live Values Display -->
+            <div x-show="autoRefresh && latestValues.length > 0" class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <h2 class="text-xl font-semibold text-gray-800 mb-4">Live Values (Auto-refreshing)</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <template x-for="(value, index) in latestValues" :key="index">
+                        <div class="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 border border-blue-200">
+                            <div class="text-sm font-medium text-gray-600 mb-1" x-text="value.nodeId"></div>
+                            <div class="text-2xl font-bold text-indigo-600" x-text="value.value"></div>
+                            <div class="text-xs text-gray-500 mt-1">
+                                <span x-text="value.timestamp"></span>
+                                <span class="ml-2"
+                                    :class="(value.quality && (value.quality.toLowerCase() === 'good' || value.quality === 'Good')) ? 'text-green-600' : 'text-red-600'"
+                                    x-text="value.quality"></span>
+                                <span x-show="value.success === false" class="ml-1 text-red-500 text-xs">✗</span>
+                                <span x-show="value.success === true" class="ml-1 text-green-500 text-xs">✓</span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+                <div class="mt-4 text-sm text-gray-500 text-center">
+                    Last updated: <span x-text="lastUpdateTime"></span> | Next update in: <span
+                        x-text="countdown"></span>s
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h2 class="text-xl font-semibold text-gray-800 mb-4">Test Results</h2>
+
+                <!-- Loading Indicator -->
+                <div x-show="loading" class="flex items-center justify-center py-8">
+                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                    <span class="ml-2 text-gray-600">Making request...</span>
+                </div>
+
+                <!-- Results List -->
+                <div x-show="!loading && results.length > 0" class="space-y-4">
+                    <template x-for="(result, index) in results" :key="index">
+                        <div class="border rounded-lg p-4"
+                            :class="result.success ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'">
+                            <div class="flex items-start justify-between">
+                                <div class="flex-1">
+                                    <div class="flex items-center mb-2">
+                                        <span
+                                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+                                            :class="result.success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'">
+                                            <span x-text="result.success ? 'SUCCESS' : 'ERROR'"></span>
+                                        </span>
+                                        <span class="ml-2 text-sm text-gray-500" x-text="result.timestamp"></span>
+                                    </div>
+                                    <div class="text-sm font-medium text-gray-900 mb-1"
+                                        x-text="result.method + ' ' + result.url"></div>
+                                    <div class="text-sm text-gray-600" x-text="result.message"></div>
+
+                                    <!-- Response Data -->
+                                    <div x-show="result.data" class="mt-3">
+                                        <details class="cursor-pointer">
+                                            <summary class="text-sm font-medium text-gray-700 hover:text-gray-900">
+                                                Response Data</summary>
+                                            <pre class="mt-2 text-xs bg-gray-100 p-3 rounded overflow-x-auto"
+                                                x-text="JSON.stringify(result.data, null, 2)"></pre>
+                                        </details>
+                                    </div>
+
+                                    <!-- Error Details -->
+                                    <div x-show="result.error" class="mt-3">
+                                        <details class="cursor-pointer">
+                                            <summary class="text-sm font-medium text-red-700 hover:text-red-900">Error
+                                                Details</summary>
+                                            <pre class="mt-2 text-xs bg-red-100 p-3 rounded overflow-x-auto"
+                                                x-text="JSON.stringify(result.error, null, 2)"></pre>
+                                        </details>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- No Results -->
+                <div x-show="!loading && results.length === 0" class="text-center py-8 text-gray-500">
+                    No test results yet. Click a test button to start.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function opcuaTest() {
+            return {
+                apiEndpoint: 'http://localhost:8080',
+                nodeIdList: ['ns=25;i=59524', 'ns=25;i=59525', 'ns=18;i=59113'],
+                loading: false,
+                results: [],
+                autoRefresh: false,
+                refreshInterval: null,
+                countdownInterval: null,
+                countdown: 1,
+                latestValues: [],
+                lastUpdateTime: '',
+
+                async makeRequest(method, url, options = {}) {
+                    const timestamp = new Date().toLocaleTimeString();
+
+                    try {
+                        this.loading = true;
+
+                        const response = await fetch(url, {
+                            method: method,
+                            mode: 'cors',
+                            credentials: 'omit',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json',
+                                ...options.headers
+                            },
+                            ...options
+                        });
+
+                        const data = await response.json();
+
+                        this.results.unshift({
+                            success: response.ok,
+                            method: method,
+                            url: url,
+                            status: response.status,
+                            message: response.ok ? `Request successful (${response.status})` : `Request failed (${response.status})`,
+                            timestamp: timestamp,
+                            data: data,
+                            error: null
+                        });
+
+                    } catch (error) {
+                        console.error('Request failed:', error);
+
+                        this.results.unshift({
+                            success: false,
+                            method: method,
+                            url: url,
+                            status: 0,
+                            message: `CORS or Network Error: ${error.message}`,
+                            timestamp: timestamp,
+                            data: null,
+                            error: {
+                                name: error.name,
+                                message: error.message,
+                                stack: error.stack
+                            }
+                        });
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                async testHealth() {
+                    const url = `${this.apiEndpoint}/health`;
+                    await this.makeRequest('GET', url);
+                },
+
+                async testSingleNode() {
+                    if (this.nodeIdList.length === 0) {
+                        alert('Please add at least one node ID');
+                        return;
+                    }
+                    const firstNode = this.nodeIdList[0].trim();
+                    if (!firstNode) {
+                        alert('First node ID is empty');
+                        return;
+                    }
+                    const encodedIds = encodeURIComponent(firstNode);
+                    const url = `${this.apiEndpoint}/iotgateway/read?ids=${encodedIds}`;
+                    await this.makeRequest('GET', url);
+                },
+
+                async testAllNodes() {
+                    const validNodes = this.nodeIdList.filter(id => id.trim() !== '');
+                    if (validNodes.length === 0) {
+                        alert('Please add at least one valid node ID');
+                        return;
+                    }
+                    const nodeIds = validNodes.join(',');
+                    const encodedIds = encodeURIComponent(nodeIds);
+                    const url = `${this.apiEndpoint}/iotgateway/read?ids=${encodedIds}`;
+                    await this.makeRequest('GET', url);
+                },
+
+                addNodeId() {
+                    this.nodeIdList.push('');
+                },
+
+                removeNodeId(index) {
+                    if (this.nodeIdList.length > 1) {
+                        this.nodeIdList.splice(index, 1);
+                    } else {
+                        alert('At least one node ID is required');
+                    }
+                },
+
+                clearResults() {
+                    this.results = [];
+                },
+
+                toggleAutoRefresh() {
+                    this.autoRefresh = !this.autoRefresh;
+
+                    if (this.autoRefresh) {
+                        this.startAutoRefresh();
+                    } else {
+                        this.stopAutoRefresh();
+                    }
+                },
+
+                startAutoRefresh() {
+                    // Initial fetch
+                    this.fetchLiveValues();
+
+                    // Set up refresh interval (1 second)
+                    this.refreshInterval = setInterval(() => {
+                        this.fetchLiveValues();
+                    }, 1000);
+
+                    // Set up countdown
+                    this.countdown = 1;
+                    this.countdownInterval = setInterval(() => {
+                        this.countdown--;
+                        if (this.countdown <= 0) {
+                            this.countdown = 1;
+                        }
+                    }, 1000);
+                },
+
+                stopAutoRefresh() {
+                    if (this.refreshInterval) {
+                        clearInterval(this.refreshInterval);
+                        this.refreshInterval = null;
+                    }
+                    if (this.countdownInterval) {
+                        clearInterval(this.countdownInterval);
+                        this.countdownInterval = null;
+                    }
+                },
+
+                async fetchLiveValues() {
+                    try {
+                        const validNodes = this.nodeIdList.filter(id => id.trim() !== '');
+                        if (validNodes.length === 0) {
+                            return;
+                        }
+
+                        const nodeIds = validNodes.join(',');
+                        const encodedIds = encodeURIComponent(nodeIds);
+                        const url = `${this.apiEndpoint}/iotgateway/read?ids=${encodedIds}`;
+
+                        const response = await fetch(url, {
+                            method: 'GET',
+                            mode: 'cors',
+                            credentials: 'omit',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json'
+                            }
+                        });
+
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.updateLiveValues(data);
+                            this.lastUpdateTime = new Date().toLocaleTimeString();
+                        } else {
+                            console.error('Failed to fetch live values:', response.status);
+                        }
+                    } catch (error) {
+                        console.error('Error fetching live values:', error);
+                    }
+                },
+
+                updateLiveValues(data) {
+                    if (data && data.readResults && Array.isArray(data.readResults)) {
+                        // Handle the actual API response format
+                        this.latestValues = data.readResults.map(item => ({
+                            nodeId: item.nodeId || 'Unknown',
+                            value: item.value !== undefined ? item.value : 'N/A',
+                            quality: item.quality || item.reason || 'Unknown',
+                            timestamp: item.timestamp_iso ? new Date(item.timestamp_iso).toLocaleTimeString() : new Date().toLocaleTimeString(),
+                            success: item.success || false
+                        }));
+                    } else if (data && data.values && Array.isArray(data.values)) {
+                        // Fallback for different response format
+                        this.latestValues = data.values.map(item => ({
+                            nodeId: item.nodeId || 'Unknown',
+                            value: item.value !== undefined ? item.value : 'N/A',
+                            quality: item.quality || 'Unknown',
+                            timestamp: new Date().toLocaleTimeString(),
+                            success: true
+                        }));
+                    } else if (data && typeof data === 'object') {
+                        // Handle simple key-value response format
+                        this.latestValues = Object.entries(data).map(([key, value]) => ({
+                            nodeId: key,
+                            value: value !== undefined ? value : 'N/A',
+                            quality: 'Good',
+                            timestamp: new Date().toLocaleTimeString(),
+                            success: true
+                        }));
+                    }
+                },
+
+                // Cleanup intervals when component is destroyed
+                destroy() {
+                    this.stopAutoRefresh();
+                }
+            }
+        }
+    </script>
+</body>
+
+</html>
