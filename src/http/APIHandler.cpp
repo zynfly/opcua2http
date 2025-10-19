@@ -10,9 +10,9 @@
 
 namespace opcua2http {
 
-APIHandler::APIHandler(CacheManager* cacheManager, 
-                      SubscriptionManager* subscriptionManager, 
-                      OPCUAClient* opcClient, 
+APIHandler::APIHandler(CacheManager* cacheManager,
+                      SubscriptionManager* subscriptionManager,
+                      OPCUAClient* opcClient,
                       const Configuration& config)
     : cacheManager_(cacheManager)
     , subscriptionManager_(subscriptionManager)
@@ -29,20 +29,21 @@ APIHandler::APIHandler(CacheManager* cacheManager,
     if (!opcClient_) {
         throw std::invalid_argument("OPCUAClient cannot be null");
     }
-    
-    std::cout << "APIHandler initialized with endpoint: " << config_.opcEndpoint 
+
+    std::cout << "APIHandler initialized with endpoint: " << config_.opcEndpoint
               << ", port: " << config_.serverPort << std::endl;
 }
 
 void APIHandler::setupRoutes(crow::App<crow::CORSHandler>& app) {
     // Configure CORS middleware
     auto& cors = app.get_middleware<crow::CORSHandler>();
-    
+
     // Configure CORS based on configuration
     auto& globalCors = cors.global()
         .headers("Content-Type", "Authorization", "X-API-Key", "Accept", "Origin", "X-Requested-With")
-        .methods("GET"_method, "POST"_method, "OPTIONS"_method);
-    
+        .methods("GET"_method, "POST"_method, "OPTIONS"_method)
+        .allow_credentials();
+
     if (config_.allowedOrigins.empty()) {
         // No specific origins configured, allow all
         globalCors.origin("*");
@@ -51,7 +52,7 @@ void APIHandler::setupRoutes(crow::App<crow::CORSHandler>& app) {
         // Use the first configured origin (Crow limitation: only one origin per rule)
         // For multiple origins, we would need multiple prefix rules or custom handling
         globalCors.origin(config_.allowedOrigins[0]);
-        
+
         if (config_.allowedOrigins.size() == 1) {
             std::cout << "CORS middleware configured for origin: " << config_.allowedOrigins[0] << std::endl;
         } else {
@@ -63,101 +64,101 @@ void APIHandler::setupRoutes(crow::App<crow::CORSHandler>& app) {
         }
     }
 
-    
+
     // Main API endpoint for reading OPC UA data
     CROW_ROUTE(app, "/iotgateway/read")
     .methods("GET"_method)
     ([this](const crow::request& req) {
         auto startTime = std::chrono::high_resolution_clock::now();
-        
+
         // Authenticate request
         AuthResult authResult = authenticateRequest(req);
         if (!authResult.success) {
             authenticationFailures_++;
             auto response = buildErrorResponse(401, "Unauthorized", authResult.reason);
-            
+
             auto endTime = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
             double responseTimeMs = duration.count() / 1000.0;
-            
+
             updateStats(false, responseTimeMs);
             logRequest(req, response, responseTimeMs);
             return response;
         }
-        
+
         // Handle the read request
         auto response = handleReadRequest(req);
-        
+
         auto endTime = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
         double responseTimeMs = duration.count() / 1000.0;
-        
+
         bool success = (response.code >= 200 && response.code < 300);
         updateStats(success, responseTimeMs);
         logRequest(req, response, responseTimeMs);
-        
+
         return response;
     });
-    
+
     // Health check endpoint
     CROW_ROUTE(app, "/health")
     ([this]() {
         return handleHealthRequest();
     });
-    
+
     // Status endpoint with detailed information
     CROW_ROUTE(app, "/status")
     ([this]() {
         return handleStatusRequest();
     });
-    
 
-    
+
+
     std::cout << "API routes configured successfully" << std::endl;
 }
 
 crow::response APIHandler::handleReadRequest(const crow::request& req) {
     totalRequests_++;
-    
+
     try {
         // Validate request
         if (!validateRequest(req)) {
             validationErrors_++;
             return buildErrorResponse(400, "Bad Request", "Invalid request parameters");
         }
-        
+
         // Extract node IDs from query parameter
         std::string idsParam = req.url_params.get("ids");
         if (idsParam.empty()) {
             validationErrors_++;
             return buildErrorResponse(400, "Bad Request", "Missing 'ids' parameter");
         }
-        
+
         // Parse node IDs
         std::vector<std::string> nodeIds = parseNodeIds(idsParam);
         if (nodeIds.empty()) {
             validationErrors_++;
             return buildErrorResponse(400, "Bad Request", "No valid node IDs provided");
         }
-        
+
         // Validate node IDs
         for (const auto& nodeId : nodeIds) {
             if (!validateNodeId(nodeId)) {
                 validationErrors_++;
-                return buildErrorResponse(400, "Bad Request", 
+                return buildErrorResponse(400, "Bad Request",
                     "Invalid node ID format: " + nodeId);
             }
         }
-        
+
         // Process the requests
         std::vector<ReadResult> results = processNodeRequests(nodeIds);
-        
+
         // Build response
         nlohmann::json responseData = buildReadResponse(results);
-        
+
         successfulRequests_++;
         return buildJSONResponse(responseData);
-        
+
     } catch (const std::exception& e) {
         failedRequests_++;
         std::cerr << "Error handling read request: " << e.what() << std::endl;
@@ -178,9 +179,9 @@ crow::response APIHandler::handleHealthRequest() {
             {"active_subscriptions", subscriptionManager_->getActiveMonitoredItems().size()},
             {"version", "1.0.0"}
         };
-        
+
         return buildJSONResponse(health);
-        
+
     } catch (const std::exception& e) {
         std::cerr << "Error handling health request: " << e.what() << std::endl;
         return buildErrorResponse(500, "Internal Server Error", e.what());
@@ -192,7 +193,7 @@ crow::response APIHandler::handleStatusRequest() {
         auto stats = getStats();
         auto cacheStats = cacheManager_->getStats();
         auto subscriptionStats = subscriptionManager_->getStats();
-        
+
         nlohmann::json status = {
             {"timestamp", getCurrentTimestamp()},
             {"uptime_seconds", std::chrono::duration_cast<std::chrono::seconds>(
@@ -229,9 +230,9 @@ crow::response APIHandler::handleStatusRequest() {
                 {"average_response_time_ms", stats.averageResponseTimeMs}
             }}
         };
-        
+
         return buildJSONResponse(status);
-        
+
     } catch (const std::exception& e) {
         std::cerr << "Error handling status request: " << e.what() << std::endl;
         return buildErrorResponse(500, "Internal Server Error", e.what());
@@ -240,24 +241,24 @@ crow::response APIHandler::handleStatusRequest() {
 
 APIHandler::AuthResult APIHandler::authenticateRequest(const crow::request& req) {
     std::string clientIP = getClientIP(req);
-    
+
     // Check rate limiting first
     if (!checkRateLimit(clientIP)) {
         return AuthResult::createFailure("Rate limit exceeded");
     }
-    
+
     // Check if IP is blocked due to too many failed attempts
     if (isIPBlocked(clientIP)) {
         return AuthResult::createFailure("IP temporarily blocked");
     }
-    
+
     // If no authentication is configured, allow all requests
     if (config_.apiKey.empty() && config_.authUsername.empty()) {
         return AuthResult::createSuccess("none");
     }
-    
+
     bool authAttempted = false;
-    
+
     // Try API Key authentication first
     if (!config_.apiKey.empty()) {
         std::string apiKey = extractAPIKey(req);
@@ -271,7 +272,7 @@ APIHandler::AuthResult APIHandler::authenticateRequest(const crow::request& req)
             }
         }
     }
-    
+
     // Try Basic Authentication
     if (!config_.authUsername.empty() && !config_.authPassword.empty()) {
         std::string authHeader = extractAuthHeader(req);
@@ -285,7 +286,7 @@ APIHandler::AuthResult APIHandler::authenticateRequest(const crow::request& req)
             }
         }
     }
-    
+
     // No valid authentication found
     if (authAttempted) {
         recordFailedAuth(clientIP);
@@ -297,21 +298,21 @@ APIHandler::AuthResult APIHandler::authenticateRequest(const crow::request& req)
 
 std::vector<std::string> APIHandler::parseNodeIds(const std::string& idsParam) {
     std::vector<std::string> nodeIds;
-    
+
     if (idsParam.empty()) {
         return nodeIds;
     }
-    
+
     // Split by comma and trim whitespace
     std::vector<std::string> parts = split(idsParam, ',');
-    
+
     for (const auto& part : parts) {
         std::string trimmed = trim(part);
         if (!trimmed.empty()) {
             nodeIds.push_back(trimmed);
         }
     }
-    
+
     return nodeIds;
 }
 
@@ -319,11 +320,11 @@ nlohmann::json APIHandler::buildReadResponse(const std::vector<ReadResult>& resu
     return buildResponseWithMetadata(results, true);
 }
 
-crow::response APIHandler::buildErrorResponse(int statusCode, 
-                                            const std::string& message, 
+crow::response APIHandler::buildErrorResponse(int statusCode,
+                                            const std::string& message,
                                             const std::string& details) {
     uint64_t timestamp = getCurrentTimestamp();
-    
+
     nlohmann::json error = {
         {"error", {
             {"code", statusCode},
@@ -333,11 +334,11 @@ crow::response APIHandler::buildErrorResponse(int statusCode,
             {"type", getErrorType(statusCode)}
         }}
     };
-    
+
     if (!details.empty()) {
         error["error"]["details"] = details;
     }
-    
+
     // Add helpful information for common errors
     switch (statusCode) {
         case 400:
@@ -363,10 +364,10 @@ crow::response APIHandler::buildErrorResponse(int statusCode,
             error["error"]["help"] = "Service temporarily unavailable";
             break;
     }
-    
+
     // Add request ID for tracking
     error["error"]["request_id"] = generateRequestId();
-    
+
     crow::response response = buildJSONResponse(error, statusCode);
     return response;
 }
@@ -375,7 +376,7 @@ crow::response APIHandler::buildJSONResponse(const nlohmann::json& data, int sta
     crow::response response(statusCode);
     response.add_header("Content-Type", "application/json; charset=utf-8");
     response.write(data.dump());
-    
+
     // Add security headers
     response.add_header("X-Content-Type-Options", "nosniff");
     response.add_header("X-Frame-Options", "DENY");
@@ -383,26 +384,26 @@ crow::response APIHandler::buildJSONResponse(const nlohmann::json& data, int sta
     response.add_header("Cache-Control", "no-cache, no-store, must-revalidate");
     response.add_header("Pragma", "no-cache");
     response.add_header("Expires", "0");
-    
+
     return response;
 }
 
 std::vector<ReadResult> APIHandler::processNodeRequests(const std::vector<std::string>& nodeIds) {
     std::vector<ReadResult> results;
     results.reserve(nodeIds.size());
-    
+
     // Build results in order, collecting non-cached nodes for batch processing
     std::vector<std::pair<std::string, size_t>> nonCachedNodes; // {nodeId, resultIndex}
-    
+
     for (const auto& nodeId : nodeIds) {
         auto cachedEntry = cacheManager_->getCachedValue(nodeId);
-        
+
         if (cachedEntry.has_value()) {
             // Use cached result
             results.push_back(cachedEntry->toReadResult());
             cacheHits_++;
             subscriptionManager_->updateLastAccessed(nodeId);
-            
+
             if (detailedLoggingEnabled_) {
                 std::cout << "Cache hit for node: " << nodeId << std::endl;
             }
@@ -413,32 +414,32 @@ std::vector<ReadResult> APIHandler::processNodeRequests(const std::vector<std::s
             cacheMisses_++;
         }
     }
-    
+
     // Batch read non-cached nodes and fill placeholders
     if (!nonCachedNodes.empty()) {
         if (detailedLoggingEnabled_) {
             std::cout << "Reading " << nonCachedNodes.size() << " nodes from OPC UA server" << std::endl;
         }
-        
+
         // Extract node IDs for batch read
         std::vector<std::string> nodeIdsToRead;
         nodeIdsToRead.reserve(nonCachedNodes.size());
         for (const auto& pair : nonCachedNodes) {
             nodeIdsToRead.push_back(pair.first);
         }
-        
+
         // Batch read from OPC UA
         auto opcResults = opcClient_->readNodes(nodeIdsToRead);
-        
+
         // Fill placeholders with actual results
         for (size_t i = 0; i < nonCachedNodes.size(); ++i) {
             const auto& nodeId = nonCachedNodes[i].first;
             size_t resultIndex = nonCachedNodes[i].second;
-            
-            ReadResult result = (i < opcResults.size()) ? 
-                opcResults[i] : 
+
+            ReadResult result = (i < opcResults.size()) ?
+                opcResults[i] :
                 ReadResult::createError(nodeId, "Failed to read from OPC UA server", getCurrentTimestamp());
-            
+
             // Create subscription for successful reads (but don't cache the read result)
             // Cache will be updated only when subscription receives data change notifications
             if (result.success && subscriptionManager_->addMonitoredItem(nodeId)) {
@@ -446,48 +447,48 @@ std::vector<ReadResult> APIHandler::processNodeRequests(const std::vector<std::s
                     std::cout << "Created subscription for node: " << nodeId << std::endl;
                 }
             }
-            
+
             // Fill the placeholder
             results[resultIndex] = std::move(result);
         }
     }
-    
+
     return results;
 }
 
 ReadResult APIHandler::processNodeRequest(const std::string& nodeId, bool& cacheHit) {
     cacheHit = false;
-    
+
     try {
         // First, try to get from cache
         auto cachedEntry = cacheManager_->getCachedValue(nodeId);
         if (cachedEntry.has_value()) {
             cacheHit = true;
-            
+
             // Update last accessed time for subscription management
             subscriptionManager_->updateLastAccessed(nodeId);
-            
+
             // Check if subscription exists, create if needed
-            if (!cachedEntry->hasSubscription && 
+            if (!cachedEntry->hasSubscription &&
                 !subscriptionManager_->hasMonitoredItem(nodeId)) {
-                
+
                 bool subscriptionCreated = subscriptionManager_->addMonitoredItem(nodeId);
                 if (subscriptionCreated) {
                     cacheManager_->setSubscriptionStatus(nodeId, true);
-                    
+
                     if (detailedLoggingEnabled_) {
-                        std::cout << "Created missing subscription for cached node: " 
+                        std::cout << "Created missing subscription for cached node: "
                                   << nodeId << std::endl;
                     }
                 }
             }
-            
+
             return cachedEntry->toReadResult();
         }
-        
+
         // Not in cache, need to read from OPC UA server
         ReadResult result = opcClient_->readNode(nodeId);
-        
+
         // Create subscription for future updates (if successful read)
         // Note: We don't cache the initial read result - cache will be updated by subscription notifications
         if (result.success) {
@@ -498,23 +499,23 @@ ReadResult APIHandler::processNodeRequest(const std::string& nodeId, bool& cache
                 }
             } else {
                 std::cerr << "Failed to create subscription for node: " << nodeId << std::endl;
-                
+
                 if (detailedLoggingEnabled_) {
                     std::cout << "Continuing without subscription for node: " << nodeId << std::endl;
                 }
             }
         } else {
             if (detailedLoggingEnabled_) {
-                std::cout << "Skipping subscription creation for failed read: " 
+                std::cout << "Skipping subscription creation for failed read: "
                           << nodeId << " (reason: " << result.reason << ")" << std::endl;
             }
         }
-        
+
         return result;
-        
+
     } catch (const std::exception& e) {
         std::cerr << "Error processing node request for " << nodeId << ": " << e.what() << std::endl;
-        return ReadResult::createError(nodeId, "Internal error: " + std::string(e.what()), 
+        return ReadResult::createError(nodeId, "Internal error: " + std::string(e.what()),
                                      getCurrentTimestamp());
     }
 }
@@ -527,27 +528,27 @@ bool APIHandler::validateBasicAuth(const std::string& authHeader) {
     if (config_.authUsername.empty() || config_.authPassword.empty()) {
         return false;
     }
-    
+
     // Check if it starts with "Basic "
     const std::string basicPrefix = "Basic ";
-    if (authHeader.length() <= basicPrefix.length() || 
+    if (authHeader.length() <= basicPrefix.length() ||
         authHeader.substr(0, basicPrefix.length()) != basicPrefix) {
         return false;
     }
-    
+
     // Extract and decode the credentials
     std::string encoded = authHeader.substr(basicPrefix.length());
     std::string decoded = decodeBase64(encoded);
-    
+
     // Find the colon separator
     size_t colonPos = decoded.find(':');
     if (colonPos == std::string::npos) {
         return false;
     }
-    
+
     std::string username = decoded.substr(0, colonPos);
     std::string password = decoded.substr(colonPos + 1);
-    
+
     return username == config_.authUsername && password == config_.authPassword;
 }
 
@@ -564,14 +565,14 @@ std::string APIHandler::decodeBase64(const std::string& encoded) {
     // Note: In production, you'd want to use a more robust implementation
     const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string decoded;
-    
+
     int val = 0, valb = -8;
     for (unsigned char c : encoded) {
         if (c == '=') break;
-        
+
         auto pos = chars.find(c);
         if (pos == std::string::npos) continue;
-        
+
         val = (val << 6) + static_cast<int>(pos);
         valb += 6;
         if (valb >= 0) {
@@ -579,7 +580,7 @@ std::string APIHandler::decodeBase64(const std::string& encoded) {
             valb -= 8;
         }
     }
-    
+
     return decoded;
 }
 
@@ -588,7 +589,7 @@ bool APIHandler::validateRequest(const crow::request& req) {
     if (req.method != crow::HTTPMethod::Get) {
         return false;
     }
-    
+
     // Check if ids parameter exists
     std::string idsParam = req.url_params.get("ids");
     return !idsParam.empty();
@@ -598,7 +599,7 @@ bool APIHandler::validateNodeId(const std::string& nodeId) {
     if (nodeId.empty()) {
         return false;
     }
-    
+
     // Basic validation for OPC UA node ID format
     // Should match patterns like: ns=2;s=Variable1, ns=0;i=2253, etc.
     std::regex nodeIdPattern(R"(^ns=\d+;[si]=.+$)");
@@ -609,8 +610,8 @@ bool APIHandler::isOriginAllowed(const std::string& origin) {
     if (config_.allowedOrigins.empty()) {
         return true; // Allow all if no restrictions configured
     }
-    
-    return std::find(config_.allowedOrigins.begin(), config_.allowedOrigins.end(), origin) 
+
+    return std::find(config_.allowedOrigins.begin(), config_.allowedOrigins.end(), origin)
            != config_.allowedOrigins.end();
 }
 
@@ -626,12 +627,12 @@ void APIHandler::updateStats(bool success, double responseTimeMs, bool /* cacheH
     } else {
         failedRequests_++;
     }
-    
+
     // Update average response time using exponential moving average
     double currentAvg = averageResponseTimeMs_.load();
     double newAvg = currentAvg == 0.0 ? responseTimeMs : (currentAvg * 0.9 + responseTimeMs * 0.1);
     averageResponseTimeMs_.store(newAvg);
-    
+
     lastRequest_.store(std::chrono::steady_clock::now());
 }
 
@@ -639,7 +640,7 @@ void APIHandler::logRequest(const crow::request& req, const crow::response& resp
     if (!detailedLoggingEnabled_) {
         return;
     }
-    
+
     std::string methodStr;
     switch (req.method) {
         case crow::HTTPMethod::Get: methodStr = "GET"; break;
@@ -650,7 +651,7 @@ void APIHandler::logRequest(const crow::request& req, const crow::response& resp
         case crow::HTTPMethod::Options: methodStr = "OPTIONS"; break;
         default: methodStr = "UNKNOWN"; break;
     }
-    
+
     std::cout << "[" << getCurrentTimestamp() << "] "
               << methodStr << " " << req.url << " "
               << response.code << " "
@@ -664,15 +665,15 @@ std::string APIHandler::getClientIP(const crow::request& req) {
     if (!xForwardedFor.empty()) {
         // Take the first IP in the list
         size_t commaPos = xForwardedFor.find(',');
-        return commaPos != std::string::npos ? 
+        return commaPos != std::string::npos ?
                trim(xForwardedFor.substr(0, commaPos)) : trim(xForwardedFor);
     }
-    
+
     std::string xRealIP = req.get_header_value("X-Real-IP");
     if (!xRealIP.empty()) {
         return trim(xRealIP);
     }
-    
+
     // Fall back to remote address (may not be available in all Crow versions)
     return "unknown";
 }
@@ -719,7 +720,7 @@ std::string APIHandler::trim(const std::string& str) {
     if (start == std::string::npos) {
         return "";
     }
-    
+
     size_t end = str.find_last_not_of(" \t\r\n");
     return str.substr(start, end - start + 1);
 }
@@ -728,11 +729,11 @@ std::vector<std::string> APIHandler::split(const std::string& str, char delimite
     std::vector<std::string> tokens;
     std::stringstream ss(str);
     std::string token;
-    
+
     while (std::getline(ss, token, delimiter)) {
         tokens.push_back(token);
     }
-    
+
     return tokens;
 }
 
@@ -769,49 +770,49 @@ bool APIHandler::isEmptyOrWhitespace(const std::string& str) {
 
 bool APIHandler::checkRateLimit(const std::string& clientIP) {
     std::lock_guard<std::mutex> lock(rateLimitMutex_);
-    
+
     auto now = std::chrono::steady_clock::now();
     auto& info = rateLimitMap_[clientIP];
-    
+
     // Allow up to 60 requests per minute per IP
     const auto timeWindow = std::chrono::minutes(1);
     const int maxRequests = 60;
-    
+
     // Reset counter if time window has passed
     if (now - info.lastAttempt > timeWindow) {
         info.failedAttempts = 0;
         info.lastAttempt = now;
         return true;
     }
-    
+
     // Check if we're within the rate limit
     if (info.failedAttempts < maxRequests) {
         info.lastAttempt = now;
         return true;
     }
-    
+
     return false;
 }
 
 void APIHandler::recordFailedAuth(const std::string& clientIP) {
     std::lock_guard<std::mutex> lock(rateLimitMutex_);
-    
+
     auto now = std::chrono::steady_clock::now();
     auto& info = rateLimitMap_[clientIP];
-    
+
     info.failedAttempts++;
     info.lastAttempt = now;
-    
+
     // Block IP for 15 minutes after 5 failed attempts
     const int maxFailedAttempts = 5;
     const auto blockDuration = std::chrono::minutes(15);
-    
+
     if (info.failedAttempts >= maxFailedAttempts) {
         info.blockUntil = now + blockDuration;
-        
+
         if (detailedLoggingEnabled_) {
-            std::cout << "IP " << clientIP << " blocked for " 
-                      << std::chrono::duration_cast<std::chrono::minutes>(blockDuration).count() 
+            std::cout << "IP " << clientIP << " blocked for "
+                      << std::chrono::duration_cast<std::chrono::minutes>(blockDuration).count()
                       << " minutes due to " << info.failedAttempts << " failed attempts" << std::endl;
         }
     }
@@ -819,32 +820,32 @@ void APIHandler::recordFailedAuth(const std::string& clientIP) {
 
 bool APIHandler::isIPBlocked(const std::string& clientIP) {
     std::lock_guard<std::mutex> lock(rateLimitMutex_);
-    
+
     auto it = rateLimitMap_.find(clientIP);
     if (it == rateLimitMap_.end()) {
         return false;
     }
-    
+
     auto now = std::chrono::steady_clock::now();
     if (now < it->second.blockUntil) {
         return true;
     }
-    
+
     // Block period has expired, reset failed attempts
     if (now >= it->second.blockUntil && it->second.failedAttempts > 0) {
         it->second.failedAttempts = 0;
         it->second.blockUntil = std::chrono::steady_clock::time_point{};
     }
-    
+
     return false;
 }
 
 std::string APIHandler::formatTimestamp(uint64_t timestamp) {
     auto timePoint = std::chrono::system_clock::from_time_t(timestamp / 1000);
     auto ms = timestamp % 1000;
-    
+
     std::time_t time = std::chrono::system_clock::to_time_t(timePoint);
-    
+
 #ifdef _WIN32
     std::tm tm_buf;
     gmtime_s(&tm_buf, &time);
@@ -852,24 +853,24 @@ std::string APIHandler::formatTimestamp(uint64_t timestamp) {
 #else
     std::tm* tm = std::gmtime(&time);
 #endif
-    
+
     std::ostringstream oss;
     oss << std::put_time(tm, "%Y-%m-%dT%H:%M:%S");
     oss << "." << std::setfill('0') << std::setw(3) << ms << "Z";
-    
+
     return oss.str();
 }
 
-nlohmann::json APIHandler::buildPaginatedResponse(const std::vector<ReadResult>& results, 
+nlohmann::json APIHandler::buildPaginatedResponse(const std::vector<ReadResult>& results,
                                                 int page, int pageSize) {
     nlohmann::json response;
-    
+
     // Calculate pagination
     int totalResults = static_cast<int>(results.size());
     int totalPages = (totalResults + pageSize - 1) / pageSize;
     int startIndex = page * pageSize;
     int endIndex = std::min(startIndex + pageSize, totalResults);
-    
+
     // Build paginated results
     nlohmann::json readResults = nlohmann::json::array();
     for (int i = startIndex; i < endIndex; ++i) {
@@ -881,13 +882,13 @@ nlohmann::json APIHandler::buildPaginatedResponse(const std::vector<ReadResult>&
             {"value", results[i].value},
             {"timestamp", results[i].timestamp}
         };
-        
+
         // Add formatted timestamp for better readability
         resultJson["timestamp_iso"] = formatTimestamp(results[i].timestamp);
-        
+
         readResults.push_back(resultJson);
     }
-    
+
     // Build response with pagination metadata
     response["readResults"] = readResults;
     response["pagination"] = {
@@ -901,20 +902,20 @@ nlohmann::json APIHandler::buildPaginatedResponse(const std::vector<ReadResult>&
     response["timestamp"] = getCurrentTimestamp();
     response["timestamp_iso"] = formatTimestamp(getCurrentTimestamp());
     response["count"] = endIndex - startIndex;
-    
+
     return response;
 }
 
-nlohmann::json APIHandler::buildResponseWithMetadata(const std::vector<ReadResult>& results, 
+nlohmann::json APIHandler::buildResponseWithMetadata(const std::vector<ReadResult>& results,
                                                    bool includeMetadata) {
     nlohmann::json response;
     nlohmann::json readResults = nlohmann::json::array();
-    
+
     // Statistics for metadata
     int successCount = 0;
     int errorCount = 0;
     std::map<std::string, int> statusCounts;
-    
+
     for (const auto& result : results) {
         // Create JSON with full field names for API response
         nlohmann::json resultJson = {
@@ -924,10 +925,10 @@ nlohmann::json APIHandler::buildResponseWithMetadata(const std::vector<ReadResul
             {"value", result.value},
             {"timestamp", result.timestamp}
         };
-        
+
         // Add formatted timestamp for better readability
         resultJson["timestamp_iso"] = formatTimestamp(result.timestamp);
-        
+
         // Add quality indicator
         if (result.success) {
             resultJson["quality"] = "good";
@@ -936,25 +937,25 @@ nlohmann::json APIHandler::buildResponseWithMetadata(const std::vector<ReadResul
             resultJson["quality"] = "bad";
             errorCount++;
         }
-        
+
         readResults.push_back(resultJson);
-        
+
         // Count status codes for metadata
         if (includeMetadata) {
             statusCounts[result.reason]++;
         }
     }
-    
+
     response["readResults"] = readResults;
     response["timestamp"] = getCurrentTimestamp();
     response["timestamp_iso"] = formatTimestamp(getCurrentTimestamp());
     response["count"] = results.size();
-    
+
     if (includeMetadata) {
         response["metadata"] = {
             {"success_count", successCount},
             {"error_count", errorCount},
-            {"success_rate", results.empty() ? 0.0 : 
+            {"success_rate", results.empty() ? 0.0 :
                 static_cast<double>(successCount) / results.size()},
             {"status_breakdown", statusCounts},
             {"server_info", {
@@ -965,7 +966,7 @@ nlohmann::json APIHandler::buildResponseWithMetadata(const std::vector<ReadResul
             }}
         };
     }
-    
+
     return response;
 }
 
@@ -998,11 +999,11 @@ std::string APIHandler::generateRequestId() {
     auto now = std::chrono::high_resolution_clock::now();
     auto timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
         now.time_since_epoch()).count();
-    
+
     // Add some randomness
     static std::atomic<uint32_t> counter{0};
     uint32_t requestCounter = counter.fetch_add(1);
-    
+
     std::ostringstream oss;
     oss << std::hex << timestamp << "-" << std::hex << requestCounter;
     return oss.str();
@@ -1010,12 +1011,12 @@ std::string APIHandler::generateRequestId() {
 
 int APIHandler::synchronizeCacheAndSubscriptions() {
     int inconsistenciesFixed = 0;
-    
+
     try {
         // Get all cached node IDs
         std::vector<std::string> cachedNodes = cacheManager_->getCachedNodeIds();
         std::vector<std::string> subscribedNodes = subscriptionManager_->getActiveMonitoredItems();
-        
+
         // Check for cached nodes without subscriptions
         for (const auto& nodeId : cachedNodes) {
             auto cachedEntry = cacheManager_->getCachedValue(nodeId);
@@ -1025,15 +1026,15 @@ int APIHandler::synchronizeCacheAndSubscriptions() {
                     // Inconsistency: cache thinks there's a subscription but there isn't
                     cacheManager_->setSubscriptionStatus(nodeId, false);
                     inconsistenciesFixed++;
-                    
+
                     if (detailedLoggingEnabled_) {
-                        std::cout << "Fixed cache inconsistency: removed subscription flag for " 
+                        std::cout << "Fixed cache inconsistency: removed subscription flag for "
                                   << nodeId << std::endl;
                     }
                 }
             }
         }
-        
+
         // Check for subscriptions without proper cache flags
         for (const auto& nodeId : subscribedNodes) {
             auto cachedEntry = cacheManager_->getCachedValue(nodeId);
@@ -1041,23 +1042,23 @@ int APIHandler::synchronizeCacheAndSubscriptions() {
                 // Inconsistency: subscription exists but cache doesn't know
                 cacheManager_->setSubscriptionStatus(nodeId, true);
                 inconsistenciesFixed++;
-                
+
                 if (detailedLoggingEnabled_) {
-                    std::cout << "Fixed cache inconsistency: added subscription flag for " 
+                    std::cout << "Fixed cache inconsistency: added subscription flag for "
                               << nodeId << std::endl;
                 }
             }
         }
-        
+
         if (inconsistenciesFixed > 0) {
-            std::cout << "Synchronized cache and subscriptions: fixed " 
+            std::cout << "Synchronized cache and subscriptions: fixed "
                       << inconsistenciesFixed << " inconsistencies" << std::endl;
         }
-        
+
     } catch (const std::exception& e) {
         std::cerr << "Error synchronizing cache and subscriptions: " << e.what() << std::endl;
     }
-    
+
     return inconsistenciesFixed;
 }
 
@@ -1067,32 +1068,32 @@ bool APIHandler::handleSubscriptionRecovery() {
             std::cerr << "Cannot recover subscriptions: OPC UA client not connected" << std::endl;
             return false;
         }
-        
+
         // Get all nodes that should have subscriptions
         std::vector<std::string> subscribedNodes = cacheManager_->getSubscribedNodeIds();
-        
+
         if (subscribedNodes.empty()) {
             if (detailedLoggingEnabled_) {
                 std::cout << "No subscriptions to recover" << std::endl;
             }
             return true;
         }
-        
+
         std::cout << "Recovering " << subscribedNodes.size() << " subscriptions..." << std::endl;
-        
+
         // Recreate all monitored items
         bool success = subscriptionManager_->recreateAllMonitoredItems();
-        
+
         if (success) {
             std::cout << "Successfully recovered all subscriptions" << std::endl;
-            
+
             // Synchronize cache and subscription states
             synchronizeCacheAndSubscriptions();
-            
+
             return true;
         } else {
             std::cerr << "Failed to recover some subscriptions" << std::endl;
-            
+
             // Try to recover individual subscriptions
             int recovered = 0;
             for (const auto& nodeId : subscribedNodes) {
@@ -1103,13 +1104,13 @@ bool APIHandler::handleSubscriptionRecovery() {
                     cacheManager_->setSubscriptionStatus(nodeId, false);
                 }
             }
-            
-            std::cout << "Recovered " << recovered << " out of " 
+
+            std::cout << "Recovered " << recovered << " out of "
                       << subscribedNodes.size() << " subscriptions" << std::endl;
-            
+
             return recovered > 0;
         }
-        
+
     } catch (const std::exception& e) {
         std::cerr << "Error during subscription recovery: " << e.what() << std::endl;
         return false;
