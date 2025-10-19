@@ -6,6 +6,7 @@
 #include <functional>
 
 #include <crow.h>
+#include <crow/middlewares/cors.h>
 #include <nlohmann/json.hpp>
 
 #include "config/Configuration.h"
@@ -83,7 +84,7 @@ public:
      * @brief Set up all routes in the Crow application
      * @param app Crow application instance to configure
      */
-    void setupRoutes(crow::SimpleApp& app);
+    void setupRoutes(crow::App<crow::CORSHandler>& app);
     
     /**
      * @brief Handle the main /iotgateway/read endpoint
@@ -111,11 +112,7 @@ public:
      */
     AuthResult authenticateRequest(const crow::request& req);
     
-    /**
-     * @brief Set up CORS (Cross-Origin Resource Sharing) configuration
-     * @param app Crow application instance to configure
-     */
-    void setupCORS(crow::SimpleApp& app);
+
     
     /**
      * @brief Get request statistics
@@ -177,12 +174,7 @@ protected:
      */
     bool isIPBlocked(const std::string& clientIP);
     
-    /**
-     * @brief Add CORS headers to response
-     * @param response HTTP response to add headers to
-     * @param origin Origin header from request (empty if not available)
-     */
-    void addCORSHeaders(crow::response& response, const std::string& origin);
+
     
     /**
      * @brief Build JSON response
@@ -202,6 +194,10 @@ protected:
     crow::response buildErrorResponse(int statusCode, 
                                     const std::string& message, 
                                     const std::string& details = "");
+    
+
+    
+
     
     /**
      * @brief Build JSON response for read results

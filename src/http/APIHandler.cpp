@@ -34,9 +34,35 @@ APIHandler::APIHandler(CacheManager* cacheManager,
               << ", port: " << config_.serverPort << std::endl;
 }
 
-void APIHandler::setupRoutes(crow::SimpleApp& app) {
-    // Set up CORS first
-    setupCORS(app);
+void APIHandler::setupRoutes(crow::App<crow::CORSHandler>& app) {
+    // Configure CORS middleware
+    auto& cors = app.get_middleware<crow::CORSHandler>();
+    
+    // Configure CORS based on configuration
+    auto& globalCors = cors.global()
+        .headers("Content-Type", "Authorization", "X-API-Key", "Accept", "Origin", "X-Requested-With")
+        .methods("GET"_method, "POST"_method, "OPTIONS"_method);
+    
+    if (config_.allowedOrigins.empty()) {
+        // No specific origins configured, allow all
+        globalCors.origin("*");
+        std::cout << "CORS middleware configured to allow all origins" << std::endl;
+    } else {
+        // Use the first configured origin (Crow limitation: only one origin per rule)
+        // For multiple origins, we would need multiple prefix rules or custom handling
+        globalCors.origin(config_.allowedOrigins[0]);
+        
+        if (config_.allowedOrigins.size() == 1) {
+            std::cout << "CORS middleware configured for origin: " << config_.allowedOrigins[0] << std::endl;
+        } else {
+            std::cout << "CORS middleware configured for primary origin: " << config_.allowedOrigins[0] << std::endl;
+            std::cout << "Note: Crow CORS middleware supports only one origin. Additional origins ignored:" << std::endl;
+            for (size_t i = 1; i < config_.allowedOrigins.size(); ++i) {
+                std::cout << "  - " << config_.allowedOrigins[i] << " (ignored)" << std::endl;
+            }
+        }
+    }
+
     
     // Main API endpoint for reading OPC UA data
     CROW_ROUTE(app, "/iotgateway/read")
@@ -85,18 +111,7 @@ void APIHandler::setupRoutes(crow::SimpleApp& app) {
         return handleStatusRequest();
     });
     
-    // Options endpoint for CORS preflight
-    CROW_ROUTE(app, "/iotgateway/read")
-    .methods("OPTIONS"_method)
-    ([this](const crow::request& req) {
-        crow::response response(200);
-        
-        // Add CORS headers
-        std::string origin = req.get_header_value("Origin");
-        addCORSHeaders(response, origin);
-        
-        return response;
-    });
+
     
     std::cout << "API routes configured successfully" << std::endl;
 }
@@ -278,19 +293,7 @@ APIHandler::AuthResult APIHandler::authenticateRequest(const crow::request& req)
     return AuthResult::createFailure("Authentication required");
 }
 
-void APIHandler::setupCORS(crow::SimpleApp& /* app */) {
-    // Crow doesn't have built-in CORS middleware, so we handle it manually in responses
-    // This method is called to initialize CORS configuration
-    
-    if (!config_.allowedOrigins.empty()) {
-        std::cout << "CORS configured with " << config_.allowedOrigins.size() 
-                  << " specific allowed origins" << std::endl;
-    } else {
-        std::cout << "CORS configured to allow all origins" << std::endl;
-    }
-    
-    std::cout << "CORS headers will be added to responses manually" << std::endl;
-}
+
 
 std::vector<std::string> APIHandler::parseNodeIds(const std::string& idsParam) {
     std::vector<std::string> nodeIds;
@@ -380,9 +383,6 @@ crow::response APIHandler::buildJSONResponse(const nlohmann::json& data, int sta
     response.add_header("Cache-Control", "no-cache, no-store, must-revalidate");
     response.add_header("Pragma", "no-cache");
     response.add_header("Expires", "0");
-    
-    // Add CORS headers
-    addCORSHeaders(response, "");
     
     return response;
 }
@@ -1116,27 +1116,10 @@ bool APIHandler::handleSubscriptionRecovery() {
     }
 }
 
-void APIHandler::addCORSHeaders(crow::response& response, const std::string& origin) {
-    if (!config_.allowedOrigins.empty()) {
-        // Check if the origin is allowed
-        if (!origin.empty() && isOriginAllowed(origin)) {
-            response.add_header("Access-Control-Allow-Origin", origin);
-            response.add_header("Access-Control-Allow-Credentials", "true");
-        } else if (origin.empty()) {
-            // No origin provided, allow all origins when no specific origin is given
-            response.add_header("Access-Control-Allow-Origin", "*");
-        } else {
-            // Origin not allowed, don't add CORS headers
-            return;
-        }
-    } else {
-        // Allow all origins if no restrictions configured
-        response.add_header("Access-Control-Allow-Origin", "*");
-    }
-    
-    response.add_header("Access-Control-Allow-Methods", "GET, OPTIONS");
-    response.add_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key");
-    response.add_header("Access-Control-Max-Age", "86400");
-}
+
+
+
+
+
 
 } // namespace opcua2http

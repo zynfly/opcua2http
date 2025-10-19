@@ -68,7 +68,6 @@ public:
     using APIHandler::validateBasicAuth;
     using APIHandler::buildJSONResponse;
     using APIHandler::buildErrorResponse;
-    using APIHandler::addCORSHeaders;
     using APIHandler::formatTimestamp;
     
     // Note: Private methods are tested indirectly through public interface
@@ -236,9 +235,8 @@ TEST_F(APIHandlerTest, BuildJSONResponse_ValidData_ReturnsFormattedResponse) {
     EXPECT_EQ(response.get_header_value("X-XSS-Protection"), "1; mode=block");
     EXPECT_EQ(response.get_header_value("Cache-Control"), "no-cache, no-store, must-revalidate");
     
-    // Check CORS headers
-    EXPECT_EQ(response.get_header_value("Access-Control-Allow-Origin"), "*");
-    EXPECT_EQ(response.get_header_value("Access-Control-Allow-Methods"), "GET, OPTIONS");
+    // Note: CORS headers are now added by Crow's CORSHandler middleware
+    // and are not present in unit test responses (middleware not active in unit tests)
     
     nlohmann::json responseJson = nlohmann::json::parse(response.body);
     EXPECT_EQ(responseJson["test"], "value");
@@ -370,35 +368,8 @@ TEST_F(APIHandlerTest, ResetStats_ClearsAllStatistics) {
     EXPECT_EQ(statsAfter.averageResponseTimeMs, 0.0);
 }
 
-// Test CORS Functionality
-TEST_F(APIHandlerTest, AddCORSHeaders_AllowedOrigin_AddsSpecificOrigin) {
-    // Arrange
-    crow::response response(200);
-    std::string allowedOrigin = "https://example.com";
-    
-    // Act
-    apiHandler_->addCORSHeaders(response, allowedOrigin);
-    
-    // Assert
-    EXPECT_EQ(response.get_header_value("Access-Control-Allow-Origin"), allowedOrigin);
-    EXPECT_EQ(response.get_header_value("Access-Control-Allow-Credentials"), "true");
-    EXPECT_EQ(response.get_header_value("Access-Control-Allow-Methods"), "GET, OPTIONS");
-    EXPECT_EQ(response.get_header_value("Access-Control-Allow-Headers"), "Content-Type, Authorization, X-API-Key");
-    EXPECT_EQ(response.get_header_value("Access-Control-Max-Age"), "86400");
-}
-
-TEST_F(APIHandlerTest, AddCORSHeaders_DisallowedOrigin_NoOriginHeader) {
-    // Arrange
-    crow::response response(200);
-    std::string disallowedOrigin = "https://malicious.com";
-    
-    // Act
-    apiHandler_->addCORSHeaders(response, disallowedOrigin);
-    
-    // Assert
-    EXPECT_TRUE(response.get_header_value("Access-Control-Allow-Origin").empty());
-    EXPECT_TRUE(response.get_header_value("Access-Control-Allow-Credentials").empty());
-}
+// Note: CORS functionality is now handled by Crow's built-in CORSHandler middleware
+// No unit tests needed as it's handled by the framework
 
 // Test Detailed Logging
 TEST_F(APIHandlerTest, SetDetailedLoggingEnabled_ChangesLoggingState) {

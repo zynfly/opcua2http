@@ -6,6 +6,7 @@
 #include <chrono>
 #include "config/Configuration.h"
 #include "crow.h"
+#include <crow/middlewares/cors.h>
 
 namespace opcua2http {
 
@@ -85,8 +86,8 @@ private:
     std::unique_ptr<ReconnectionManager> reconnectionManager_;
     std::unique_ptr<APIHandler> apiHandler_;
     
-    // Crow HTTP application
-    crow::SimpleApp app_;
+    // Crow HTTP application with CORS middleware
+    crow::App<crow::CORSHandler> app_;
     
     // Runtime state
     std::atomic<bool> running_;
