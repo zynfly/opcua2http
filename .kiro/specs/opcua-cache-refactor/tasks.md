@@ -161,7 +161,7 @@
     - Implement connection timeout and retry configuration
     - _Requirements: 5.1, 5.4_
 
-  - [ ] 6.3 Remove subscription-related functionality
+  - [x] 6.3 Remove subscription-related functionality
     - Remove all subscription management code from OPCUAClient
     - Simplify client to focus only on read operations
     - Clean up unused subscription callbacks and state management
