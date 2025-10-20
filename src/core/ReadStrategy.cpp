@@ -219,7 +219,7 @@ size_t ReadStrategy::getMaxConcurrentReads() const {
     return maxConcurrentReads_.load();
 }
 
-void ReadStrategy::setBackgroundUpdater(BackgroundUpdater* backgroundUpdater) {
+void ReadStrategy::setBackgroundUpdater(IBackgroundUpdater* backgroundUpdater) {
     backgroundUpdater_ = backgroundUpdater;
     spdlog::debug("Background updater {} set", backgroundUpdater ? "instance" : "null");
 }

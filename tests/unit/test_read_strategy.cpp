@@ -4,8 +4,11 @@
 #include <chrono>
 #include <vector>
 #include <atomic>
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 
 #include "core/ReadStrategy.h"
+#include "core/IBackgroundUpdater.h"
 #include "cache/CacheManager.h"
 #include "opcua/OPCUAClient.h"
 
@@ -15,6 +18,14 @@ using namespace std::chrono_literals;
 class ReadStrategyTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // Save original logger
+        originalLogger_ = spdlog::default_logger();
+        
+        // Create clean test logger
+        auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+        auto logger = std::make_shared<spdlog::logger>("test_default", sink);
+        spdlog::set_default_logger(logger);
+        
         // Initialize cache manager with test configuration
         cacheManager_ = std::make_unique<CacheManager>(60, 1000, 3, 10);
         
@@ -29,8 +40,17 @@ protected:
         readStrategy_.reset();
         opcClient_.reset();
         cacheManager_.reset();
+        
+        // Restore original logger
+        if (originalLogger_) {
+            spdlog::set_default_logger(originalLogger_);
+        } else {
+            auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+            spdlog::set_default_logger(std::make_shared<spdlog::logger>("default", sink));
+        }
     }
 
+    std::shared_ptr<spdlog::logger> originalLogger_;
     std::unique_ptr<CacheManager> cacheManager_;
     std::unique_ptr<OPCUAClient> opcClient_;
     std::unique_ptr<ReadStrategy> readStrategy_;
@@ -132,7 +152,7 @@ TEST_F(ReadStrategyTest, BackgroundUpdaterIntegration) {
     EXPECT_NO_THROW(readStrategy_->scheduleBackgroundUpdates(testNodes));
 }
 
-class MockBackgroundUpdater : public BackgroundUpdater {
+class MockBackgroundUpdater : public IBackgroundUpdater {
 public:
     MOCK_METHOD(void, scheduleUpdate, (const std::string& nodeId), (override));
     MOCK_METHOD(void, scheduleBatchUpdate, (const std::vector<std::string>& nodeIds), (override));

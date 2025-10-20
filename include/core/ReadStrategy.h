@@ -11,7 +11,7 @@
 #include "cache/CacheManager.h"
 #include "opcua/OPCUAClient.h"
 #include "core/ReadResult.h"
-#include "core/BackgroundUpdater.h"
+#include "core/IBackgroundUpdater.h"
 
 namespace opcua2http {
 
@@ -133,13 +133,13 @@ public:
      * @brief Set background updater instance (for dependency injection)
      * @param backgroundUpdater Pointer to background updater instance
      */
-    void setBackgroundUpdater(BackgroundUpdater* backgroundUpdater);
+    void setBackgroundUpdater(IBackgroundUpdater* backgroundUpdater);
 
 private:
     // Dependencies
     CacheManager* cacheManager_;                              // Cache manager instance
     OPCUAClient* opcClient_;                                  // OPC UA client instance
-    BackgroundUpdater* backgroundUpdater_;                    // Background updater instance (optional)
+    IBackgroundUpdater* backgroundUpdater_;                   // Background updater instance (optional)
 
     // Concurrency control
     mutable std::mutex readMutex_;                           // Mutex for protecting activeReads_
