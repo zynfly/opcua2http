@@ -37,9 +37,29 @@ struct Configuration {
     std::string authPassword;             // AUTH_PASSWORD
     std::vector<std::string> allowedOrigins; // ALLOWED_ORIGINS (comma-separated)
     
-    // Cache Configuration
+    // Cache Configuration (Legacy - for backward compatibility)
     int cacheExpireMinutes;               // CACHE_EXPIRE_MINUTES
     int subscriptionCleanupMinutes;       // SUBSCRIPTION_CLEANUP_MINUTES
+    
+    // New Cache Timing Configuration
+    int cacheRefreshThresholdSeconds;     // CACHE_REFRESH_THRESHOLD_SECONDS
+    int cacheExpireSeconds;               // CACHE_EXPIRE_SECONDS
+    int cacheCleanupIntervalSeconds;      // CACHE_CLEANUP_INTERVAL_SECONDS
+    
+    // Background Update Configuration
+    int backgroundUpdateThreads;         // BACKGROUND_UPDATE_THREADS
+    int backgroundUpdateQueueSize;       // BACKGROUND_UPDATE_QUEUE_SIZE
+    int backgroundUpdateTimeoutMs;       // BACKGROUND_UPDATE_TIMEOUT_MS
+    
+    // Performance Tuning Configuration
+    int cacheMaxEntries;                 // CACHE_MAX_ENTRIES
+    int cacheMaxMemoryMb;                // CACHE_MAX_MEMORY_MB
+    int cacheConcurrentReads;            // CACHE_CONCURRENT_READS
+    
+    // OPC UA Optimization Configuration
+    int opcReadTimeoutMs;                // OPC_READ_TIMEOUT_MS
+    int opcBatchSize;                    // OPC_BATCH_SIZE
+    int opcConnectionPoolSize;           // OPC_CONNECTION_POOL_SIZE
     
     // Logging Configuration
     std::string logLevel;                 // LOG_LEVEL
@@ -55,6 +75,23 @@ struct Configuration {
      * @return true if configuration is valid, false otherwise
      */
     bool validate() const;
+    
+    /**
+     * @brief Validate cache timing configuration parameters
+     * @return true if cache timing configuration is valid, false otherwise
+     */
+    bool validateCacheTimingConfig() const;
+    
+    /**
+     * @brief Validate performance configuration parameters
+     * @return true if performance configuration is valid, false otherwise
+     */
+    bool validatePerformanceConfig() const;
+    
+    /**
+     * @brief Load cache-specific settings from environment variables
+     */
+    void loadCacheSettings();
     
     /**
      * @brief Get configuration as string for logging
