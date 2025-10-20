@@ -3,9 +3,8 @@
 #include <spdlog/spdlog.h>
 #include "opcua/OPCUAClient.h"
 #include "cache/CacheManager.h"
-#include "subscription/SubscriptionManager.h"
-#include "reconnection/ReconnectionManager.h"
 #include "core/ReadStrategy.h"
+#include "core/BackgroundUpdater.h"
 #include "http/APIHandler.h"
 #include <iostream>
 #include <csignal>
@@ -98,13 +97,15 @@ void OPCUAHTTPBridge::run() {
         spdlog::info("Configuration:");
         spdlog::info("  OPC UA Endpoint: {}", config_->opcEndpoint);
         spdlog::info("  HTTP Port: {}", config_->serverPort);
-        spdlog::info("  Cache Expire: {} minutes", config_->cacheExpireMinutes);
-        spdlog::info("  Subscription Cleanup: {} minutes", config_->subscriptionCleanupMinutes);
+        spdlog::info("  Cache Refresh Threshold: {}s", config_->cacheRefreshThresholdSeconds);
+        spdlog::info("  Cache Expire: {}s", config_->cacheExpireSeconds);
+        spdlog::info("  Cache Cleanup Interval: {}s", config_->cacheCleanupIntervalSeconds);
+        spdlog::info("  Background Update Threads: {}", config_->backgroundUpdateThreads);
         spdlog::info("  Log Level: {}", config_->logLevel);
 
-        // Start reconnection monitoring
-        reconnectionManager_->startMonitoring();
-        spdlog::info("✓ Reconnection monitoring started");
+        // Start background updater
+        backgroundUpdater_->start();
+        spdlog::info("✓ Background updater started with {} worker threads", config_->backgroundUpdateThreads);
 
         // Start cache cleanup thread with enhanced logging
         cleanupThread_ = std::thread([this]() {
@@ -112,7 +113,7 @@ void OPCUAHTTPBridge::run() {
 
             while (running_.load()) {
                 // Sleep in small intervals to allow quick shutdown
-                auto cleanupInterval = std::chrono::minutes(5);
+                auto cleanupInterval = std::chrono::seconds(config_->cacheCleanupIntervalSeconds);
                 auto checkInterval = std::chrono::milliseconds(500);
                 auto elapsed = std::chrono::milliseconds(0);
 
@@ -124,17 +125,14 @@ void OPCUAHTTPBridge::run() {
                 if (running_.load()) {
                     ErrorHandler::executeWithErrorHandling([this]() {
                         auto beforeCache = cacheManager_->getCachedNodeIds().size();
-                        auto beforeSubs = subscriptionManager_->getActiveMonitoredItems().size();
 
                         cacheManager_->cleanupExpiredEntries();
-                        subscriptionManager_->cleanupUnusedItems();
 
                         auto afterCache = cacheManager_->getCachedNodeIds().size();
-                        auto afterSubs = subscriptionManager_->getActiveMonitoredItems().size();
 
-                        if (beforeCache != afterCache || beforeSubs != afterSubs) {
-                            spdlog::info("Cleanup completed - Cache: {}→{}, Subscriptions: {}→{}",
-                                       beforeCache, afterCache, beforeSubs, afterSubs);
+                        if (beforeCache != afterCache) {
+                            spdlog::info("Cache cleanup completed - Entries: {}→{}",
+                                       beforeCache, afterCache);
                         }
 
                     }, "Cache cleanup");
@@ -209,10 +207,10 @@ void OPCUAHTTPBridge::stop() {
         app_.stop();
         spdlog::debug("HTTP server stop signal sent");
 
-        // Stop reconnection monitoring
-        if (reconnectionManager_) {
-            reconnectionManager_->stopMonitoring();
-            spdlog::debug("Reconnection monitoring stopped");
+        // Stop background updater
+        if (backgroundUpdater_) {
+            backgroundUpdater_->stop();
+            spdlog::debug("Background updater stopped");
         }
 
         // Wait for cleanup thread
@@ -284,43 +282,53 @@ bool OPCUAHTTPBridge::initializeComponents() {
     return ErrorHandler::executeWithErrorHandling([this]() {
         spdlog::info("Initializing core components...");
 
-        // Initialize Cache Manager
+        // Initialize Cache Manager with new cache timing configuration
         cacheManager_ = std::make_unique<CacheManager>(
-            config_->cacheExpireMinutes
+            config_->cacheExpireMinutes,
+            config_->cacheMaxEntries,
+            config_->cacheRefreshThresholdSeconds,
+            config_->cacheExpireSeconds
         );
-        spdlog::debug("Cache manager initialized");
+        spdlog::debug("Cache manager initialized with refresh threshold: {}s, expire: {}s, max entries: {}",
+                     config_->cacheRefreshThresholdSeconds,
+                     config_->cacheExpireSeconds,
+                     config_->cacheMaxEntries);
 
-        // Initialize Subscription Manager
-        subscriptionManager_ = std::make_unique<SubscriptionManager>(
-            opcClient_.get(),
-            cacheManager_.get(),
-            config_->subscriptionCleanupMinutes
-        );
-
-        if (!subscriptionManager_->initializeSubscription()) {
-            throw std::runtime_error("Failed to initialize subscription manager");
-        }
-        spdlog::debug("Subscription manager initialized");
-
-        // Initialize Reconnection Manager
-        reconnectionManager_ = std::make_unique<ReconnectionManager>(
-            opcClient_.get(),
-            subscriptionManager_.get(),
-            *config_
-        );
-        spdlog::debug("Reconnection manager initialized");
-
-        // Initialize ReadStrategy (temporary for task 5)
-        auto readStrategy = std::make_unique<ReadStrategy>(
+        // Initialize BackgroundUpdater
+        backgroundUpdater_ = std::make_unique<BackgroundUpdater>(
             cacheManager_.get(),
             opcClient_.get()
         );
-        spdlog::debug("Read strategy initialized");
+
+        // Configure background updater from configuration
+        backgroundUpdater_->setMaxConcurrentUpdates(config_->backgroundUpdateThreads);
+        backgroundUpdater_->setUpdateQueueSize(config_->backgroundUpdateQueueSize);
+        backgroundUpdater_->setUpdateTimeout(std::chrono::milliseconds(config_->backgroundUpdateTimeoutMs));
+
+        spdlog::debug("Background updater initialized with {} threads, queue size: {}, timeout: {}ms",
+                     config_->backgroundUpdateThreads,
+                     config_->backgroundUpdateQueueSize,
+                     config_->backgroundUpdateTimeoutMs);
+
+        // Initialize ReadStrategy
+        readStrategy_ = std::make_unique<ReadStrategy>(
+            cacheManager_.get(),
+            opcClient_.get()
+        );
+
+        // Set background updater for ReadStrategy
+        readStrategy_->setBackgroundUpdater(backgroundUpdater_.get());
+
+        // Configure ReadStrategy from configuration
+        readStrategy_->setMaxConcurrentReads(config_->cacheConcurrentReads);
+
+        spdlog::debug("Read strategy initialized with max concurrent reads: {}",
+                     config_->cacheConcurrentReads);
 
         // Initialize API Handler
         apiHandler_ = std::make_unique<APIHandler>(
             cacheManager_.get(),
-            readStrategy.release(), // Transfer ownership temporarily
+            readStrategy_.get(),
             opcClient_.get(),
             *config_
         );
@@ -359,10 +367,10 @@ void OPCUAHTTPBridge::cleanup() {
     spdlog::info("Cleaning up resources...");
 
     ErrorHandler::executeWithErrorHandling([this]() {
-        // Stop all components gracefully
-        if (reconnectionManager_) {
-            reconnectionManager_->stopMonitoring();
-            spdlog::debug("Reconnection manager stopped");
+        // Stop background updater
+        if (backgroundUpdater_) {
+            backgroundUpdater_->stop();
+            spdlog::debug("Background updater stopped");
         }
 
         // Disconnect OPC UA client
@@ -375,11 +383,11 @@ void OPCUAHTTPBridge::cleanup() {
         apiHandler_.reset();
         spdlog::debug("API handler cleaned up");
 
-        reconnectionManager_.reset();
-        spdlog::debug("Reconnection manager cleaned up");
+        readStrategy_.reset();
+        spdlog::debug("Read strategy cleaned up");
 
-        subscriptionManager_.reset();
-        spdlog::debug("Subscription manager cleaned up");
+        backgroundUpdater_.reset();
+        spdlog::debug("Background updater cleaned up");
 
         cacheManager_.reset();
         spdlog::debug("Cache manager cleaned up");
@@ -403,18 +411,39 @@ std::string OPCUAHTTPBridge::getStatus() const {
         auto now = std::chrono::steady_clock::now();
         auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - startTime_).count();
 
+        // Get cache statistics
+        auto cacheStats = cacheManager_ ? cacheManager_->getStats() : CacheManager::CacheStats{};
+
+        // Get background updater statistics
+        auto bgStats = backgroundUpdater_ ? backgroundUpdater_->getStats() : BackgroundUpdater::UpdateStats{};
+
         // Build status JSON
         std::string status = R"({
   "service": "opcua-http-bridge",
   "status": ")" + (running_.load() ? std::string("running") : std::string("stopped")) + R"(",
   "uptime_seconds": )" + std::to_string(uptime) + R"(,
   "opc_connected": )" + (opcClient_ && opcClient_->isConnected() ? "true" : "false") + R"(,
-  "cached_items": )" + std::to_string(cacheManager_ ? cacheManager_->getCachedNodeIds().size() : 0) + R"(,
-  "active_subscriptions": )" + std::to_string(subscriptionManager_ ? subscriptionManager_->getActiveMonitoredItems().size() : 0) + R"(,
+  "cache": {
+    "total_entries": )" + std::to_string(cacheStats.totalEntries) + R"(,
+    "subscribed_entries": )" + std::to_string(cacheStats.subscribedEntries) + R"(,
+    "expired_entries": )" + std::to_string(cacheStats.expiredEntries) + R"(,
+    "total_hits": )" + std::to_string(cacheStats.totalHits) + R"(,
+    "total_misses": )" + std::to_string(cacheStats.totalMisses) + R"(,
+    "hit_ratio": )" + std::to_string(cacheStats.hitRatio) + R"(
+  },
+  "background_updates": {
+    "total_updates": )" + std::to_string(bgStats.totalUpdates) + R"(,
+    "successful_updates": )" + std::to_string(bgStats.successfulUpdates) + R"(,
+    "failed_updates": )" + std::to_string(bgStats.failedUpdates) + R"(,
+    "queued_updates": )" + std::to_string(bgStats.queuedUpdates) + R"(,
+    "average_update_time_ms": )" + std::to_string(bgStats.averageUpdateTime) + R"(
+  },
   "configuration": {
     "opc_endpoint": ")" + (config_ ? config_->opcEndpoint : "unknown") + R"(",
     "server_port": )" + std::to_string(config_ ? config_->serverPort : 0) + R"(,
-    "cache_expire_minutes": )" + std::to_string(config_ ? config_->cacheExpireMinutes : 0) + R"(
+    "cache_refresh_threshold_seconds": )" + std::to_string(config_ ? config_->cacheRefreshThresholdSeconds : 0) + R"(,
+    "cache_expire_seconds": )" + std::to_string(config_ ? config_->cacheExpireSeconds : 0) + R"(,
+    "background_update_threads": )" + std::to_string(config_ ? config_->backgroundUpdateThreads : 0) + R"(
   }
 })";
 
