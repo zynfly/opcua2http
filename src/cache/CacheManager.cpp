@@ -6,18 +6,19 @@
 
 namespace opcua2http {
 
-CacheManager::CacheManager(int cacheExpireMinutes, size_t maxCacheSize, 
+CacheManager::CacheManager(int cacheExpireMinutes, size_t maxCacheSize,
                           int refreshThresholdSeconds, int expireTimeSeconds)
-    : cacheExpireTime_(cacheExpireMinutes)
+    : memoryManager_(std::make_unique<CacheMemoryManager>(100 * 1024 * 1024, maxCacheSize))
+    , cacheExpireTime_(cacheExpireMinutes)
     , refreshThreshold_(refreshThresholdSeconds)
     , expireTime_(expireTimeSeconds)
     , maxCacheSize_(maxCacheSize)
     , lastCleanup_(std::chrono::steady_clock::now())
     , creationTime_(std::chrono::steady_clock::now()) {
-    
-    std::cout << "CacheManager initialized with " << cacheExpireMinutes 
-              << " minutes expiration, " << refreshThresholdSeconds 
-              << "s refresh threshold, " << expireTimeSeconds 
+
+    std::cout << "CacheManager initialized with " << cacheExpireMinutes
+              << " minutes expiration, " << refreshThresholdSeconds
+              << "s refresh threshold, " << expireTimeSeconds
               << "s expire time, and max size " << maxCacheSize << std::endl;
 }
 
@@ -30,9 +31,9 @@ std::optional<CacheManager::CacheEntry> CacheManager::getCachedValue(const std::
 
     // Lock-free statistics update
     totalReads_.fetch_add(1, std::memory_order_relaxed);
-    
+
     std::shared_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
     auto it = cache_.find(nodeId);
     if (it != cache_.end()) {
         // Lock-free last accessed time update
@@ -40,15 +41,15 @@ std::optional<CacheManager::CacheEntry> CacheManager::getCachedValue(const std::
         totalHits_.fetch_add(1, std::memory_order_relaxed);
         return it->second;
     }
-    
+
     totalMisses_.fetch_add(1, std::memory_order_relaxed);
     return std::nullopt;
 }
 
-void CacheManager::updateCache(const std::string& nodeId, 
-                              const std::string& value, 
-                              const std::string& status, 
-                              const std::string& reason, 
+void CacheManager::updateCache(const std::string& nodeId,
+                              const std::string& value,
+                              const std::string& status,
+                              const std::string& reason,
                               uint64_t timestamp) {
     // Check access level
     if (!checkAccessLevel(AccessLevel::READ_WRITE)) {
@@ -57,9 +58,9 @@ void CacheManager::updateCache(const std::string& nodeId,
     }
 
     std::unique_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
     totalWrites_.fetch_add(1, std::memory_order_relaxed);
-    
+
     auto it = cache_.find(nodeId);
     if (it != cache_.end()) {
         // Update existing entry (preserve creationTime)
@@ -68,9 +69,15 @@ void CacheManager::updateCache(const std::string& nodeId,
         it->second.reason = reason;
         it->second.timestamp = timestamp;
         it->second.updateLastAccessed(); // Use atomic method
-        
+
         std::cout << "Cache updated for node " << nodeId << " with value: " << value << std::endl;
     } else {
+        // Check memory pressure before adding new entry
+        if (memoryManager_->hasMemoryPressure() || memoryManager_->hasEntryPressure()) {
+            size_t evicted = handleMemoryPressure();
+            std::cout << "Memory pressure detected, evicted " << evicted << " entries" << std::endl;
+        }
+
         // Create new entry
         CacheEntry entry;
         entry.nodeId = nodeId;
@@ -81,10 +88,14 @@ void CacheManager::updateCache(const std::string& nodeId,
         entry.creationTime = std::chrono::steady_clock::now();
         entry.lastAccessed.store(std::chrono::steady_clock::now());
         entry.hasSubscription.store(false);
-        
+
         cache_[nodeId] = entry;
         std::cout << "New cache entry created for node " << nodeId << " with value: " << value << std::endl;
-        
+
+        // Update memory manager (use no-lock version since we already hold the lock)
+        memoryManager_->updateCurrentEntryCount(cache_.size());
+        memoryManager_->updateCurrentMemoryUsage(getMemoryUsageNoLock());
+
         // Enforce size limit if necessary
         if (cache_.size() > maxCacheSize_) {
             enforceSizeLimit();
@@ -93,13 +104,31 @@ void CacheManager::updateCache(const std::string& nodeId,
 }
 
 void CacheManager::addCacheEntry(const std::string& nodeId, const CacheEntry& entry) {
+    // Check memory pressure before acquiring write lock
+    bool needsEviction = false;
+    if (memoryManager_) {
+        needsEviction = memoryManager_->hasMemoryPressure() || memoryManager_->hasEntryPressure();
+    }
+
     std::unique_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
+    // Handle memory pressure if needed
+    if (needsEviction) {
+        size_t evicted = handleMemoryPressure();
+        std::cout << "Memory pressure detected, evicted " << evicted << " entries" << std::endl;
+    }
+
     cache_[nodeId] = entry;
     cache_[nodeId].updateLastAccessed(); // Use atomic method
-    
+
     std::cout << "Cache entry added for node " << nodeId << std::endl;
-    
+
+    // Update memory manager (use no-lock version since we already hold the lock)
+    if (memoryManager_) {
+        memoryManager_->updateCurrentEntryCount(cache_.size());
+        memoryManager_->updateCurrentMemoryUsage(getMemoryUsageNoLock());
+    }
+
     // Enforce size limit if necessary
     if (cache_.size() > maxCacheSize_) {
         enforceSizeLimit();
@@ -116,20 +145,20 @@ void CacheManager::addCacheEntry(const ReadResult& result, bool hasSubscription)
     entry.creationTime = std::chrono::steady_clock::now();
     entry.lastAccessed.store(std::chrono::steady_clock::now());
     entry.hasSubscription.store(hasSubscription);
-    
+
     addCacheEntry(result.id, entry);
 }
 
 bool CacheManager::removeCacheEntry(const std::string& nodeId) {
     std::unique_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
     auto it = cache_.find(nodeId);
     if (it != cache_.end()) {
         cache_.erase(it);
         std::cout << "Cache entry removed for node " << nodeId << std::endl;
         return true;
     }
-    
+
     return false;
 }
 
@@ -140,10 +169,10 @@ size_t CacheManager::cleanupExpiredEntries() {
     }
 
     std::unique_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
     size_t removedCount = 0;
     auto now = std::chrono::steady_clock::now();
-    
+
     for (auto it = cache_.begin(); it != cache_.end();) {
         if (isExpired(it->second)) {
             std::cout << "Removing expired cache entry for node " << it->first << std::endl;
@@ -153,13 +182,13 @@ size_t CacheManager::cleanupExpiredEntries() {
             ++it;
         }
     }
-    
+
     lastCleanup_ = now;
-    
+
     if (removedCount > 0) {
         std::cout << "Cleanup removed " << removedCount << " expired cache entries" << std::endl;
     }
-    
+
     return removedCount;
 }
 
@@ -170,11 +199,11 @@ size_t CacheManager::cleanupUnusedEntries() {
     }
 
     std::unique_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
     size_t removedCount = 0;
     auto now = std::chrono::steady_clock::now();
     auto unusedThreshold = now - std::chrono::minutes(30); // Remove entries not accessed in 30 minutes
-    
+
     for (auto it = cache_.begin(); it != cache_.end();) {
         // Only remove entries without subscriptions that haven't been accessed recently
         if (!it->second.getSubscriptionStatus() && it->second.getLastAccessed() < unusedThreshold) {
@@ -185,71 +214,71 @@ size_t CacheManager::cleanupUnusedEntries() {
             ++it;
         }
     }
-    
+
     if (removedCount > 0) {
         std::cout << "Cleanup removed " << removedCount << " unused cache entries" << std::endl;
     }
-    
+
     return removedCount;
 }
 
 std::vector<std::string> CacheManager::getCachedNodeIds() const {
     std::shared_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
     std::vector<std::string> nodeIds;
     nodeIds.reserve(cache_.size());
-    
+
     for (const auto& pair : cache_) {
         nodeIds.push_back(pair.first);
     }
-    
+
     return nodeIds;
 }
 
 std::vector<std::string> CacheManager::getSubscribedNodeIds() const {
     std::shared_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
     std::vector<std::string> nodeIds;
-    
+
     for (const auto& pair : cache_) {
         if (pair.second.getSubscriptionStatus()) {
             nodeIds.push_back(pair.first);
         }
     }
-    
+
     return nodeIds;
 }
 
 void CacheManager::setSubscriptionStatus(const std::string& nodeId, bool hasSubscription) {
     std::shared_lock<std::shared_mutex> lock(cacheMutex_); // Use shared lock for atomic operations
-    
+
     auto it = cache_.find(nodeId);
     if (it != cache_.end()) {
         it->second.setSubscriptionStatus(hasSubscription); // Use atomic method
         it->second.updateLastAccessed(); // Use atomic method
-        
-        std::cout << "Subscription status for node " << nodeId 
+
+        std::cout << "Subscription status for node " << nodeId
                   << " set to " << (hasSubscription ? "active" : "inactive") << std::endl;
     }
 }
 
 CacheManager::CacheStats CacheManager::getStats() const {
     std::shared_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
     size_t subscribedCount = 0;
     size_t memoryUsage = 0;
-    
+
     for (const auto& pair : cache_) {
         if (pair.second.getSubscriptionStatus()) {
             ++subscribedCount;
         }
         memoryUsage += calculateEntrySize(pair.second);
     }
-    
+
     uint64_t hits = totalHits_.load(std::memory_order_relaxed);
     uint64_t misses = totalMisses_.load(std::memory_order_relaxed);
     double hitRatio = (hits + misses > 0) ? static_cast<double>(hits) / (hits + misses) : 0.0;
-    
+
     return CacheStats{
         cache_.size(),
         subscribedCount,
@@ -273,10 +302,10 @@ void CacheManager::clear() {
     }
 
     std::unique_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
     size_t count = cache_.size();
     cache_.clear();
-    
+
     std::cout << "Cache cleared, removed " << count << " entries" << std::endl;
 }
 
@@ -302,42 +331,42 @@ bool CacheManager::isExpired(const CacheEntry& entry) const {
 
 size_t CacheManager::enforceSizeLimit() {
     // This method assumes unique_lock is already held
-    
+
     if (cache_.size() <= maxCacheSize_) {
         return 0;
     }
-    
+
     size_t toRemove = cache_.size() - maxCacheSize_;
     size_t removedCount = 0;
-    
+
     // Create vector of entries sorted by last accessed time (oldest first)
     std::vector<std::pair<std::string, std::chrono::steady_clock::time_point>> entries;
     entries.reserve(cache_.size());
-    
+
     for (const auto& pair : cache_) {
         // Don't remove entries with active subscriptions
         if (!pair.second.getSubscriptionStatus()) {
             entries.emplace_back(pair.first, pair.second.getLastAccessed());
         }
     }
-    
+
     // Sort by last accessed time (oldest first)
-    std::sort(entries.begin(), entries.end(), 
+    std::sort(entries.begin(), entries.end(),
               [](const auto& a, const auto& b) {
                   return a.second < b.second;
               });
-    
+
     // Remove oldest entries without subscriptions
     for (size_t i = 0; i < std::min(toRemove, entries.size()); ++i) {
         auto it = cache_.find(entries[i].first);
         if (it != cache_.end()) {
-            std::cout << "Removing cache entry for node " << it->first 
+            std::cout << "Removing cache entry for node " << it->first
                       << " due to size limit" << std::endl;
             cache_.erase(it);
             ++removedCount;
         }
     }
-    
+
     return removedCount;
 }
 
@@ -345,23 +374,27 @@ size_t CacheManager::enforceSizeLimit() {
 
 size_t CacheManager::getMemoryUsage() const {
     std::shared_lock<std::shared_mutex> lock(cacheMutex_);
-    
+    return getMemoryUsageNoLock();
+}
+
+size_t CacheManager::getMemoryUsageNoLock() const {
+    // This method assumes lock is already held
     size_t totalSize = 0;
     for (const auto& pair : cache_) {
         totalSize += calculateEntrySize(pair.second);
     }
-    
+
     return totalSize;
 }
 
 double CacheManager::getHitRatio() const {
     uint64_t hits = totalHits_.load(std::memory_order_relaxed);
     uint64_t misses = totalMisses_.load(std::memory_order_relaxed);
-    
+
     if (hits + misses == 0) {
         return 0.0;
     }
-    
+
     return static_cast<double>(hits) / (hits + misses);
 }
 
@@ -395,7 +428,7 @@ size_t CacheManager::calculateEntrySize(const CacheEntry& entry) const {
     size += entry.value.capacity();
     size += entry.status.capacity();
     size += entry.reason.capacity();
-    
+
     return size;
 }
 
@@ -407,20 +440,20 @@ CacheManager::CacheResult CacheManager::getCachedValueWithStatus(const std::stri
     }
 
     std::shared_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
     totalReads_.fetch_add(1, std::memory_order_relaxed);
-    
+
     auto it = cache_.find(nodeId);
     if (it != cache_.end()) {
         // Update last accessed time atomically
         it->second.updateLastAccessed();
-        
+
         CacheStatus status = evaluateCacheStatus(it->second);
         recordCacheHit(status);
-        
+
         return CacheResult{it->second, status};
     }
-    
+
     recordCacheMiss();
     return CacheResult{std::nullopt, CacheStatus::EXPIRED};
 }
@@ -433,28 +466,28 @@ std::vector<CacheManager::CacheResult> CacheManager::getCachedValuesWithStatus(c
     }
 
     std::shared_lock<std::shared_mutex> lock(cacheMutex_);
-    
+
     std::vector<CacheResult> results;
     results.reserve(nodeIds.size());
-    
+
     for (const auto& nodeId : nodeIds) {
         totalReads_.fetch_add(1, std::memory_order_relaxed);
-        
+
         auto it = cache_.find(nodeId);
         if (it != cache_.end()) {
             // Update last accessed time atomically
             it->second.updateLastAccessed();
-            
+
             CacheStatus status = evaluateCacheStatus(it->second);
             recordCacheHit(status);
-            
+
             results.emplace_back(CacheResult{it->second, status});
         } else {
             recordCacheMiss();
             results.emplace_back(CacheResult{std::nullopt, CacheStatus::EXPIRED});
         }
     }
-    
+
     return results;
 }
 
@@ -465,14 +498,33 @@ void CacheManager::updateCacheBatch(const std::vector<ReadResult>& results) {
         return;
     }
 
+    if (results.empty()) {
+        return;
+    }
+
     // Increment batch operations counter (lock-free)
     batchOperations_.fetch_add(1, std::memory_order_relaxed);
 
-    std::unique_lock<std::shared_mutex> lock(cacheMutex_);
-    
-    // Batch update statistics (lock-free)
+    // Batch update statistics (lock-free, before acquiring lock)
     totalWrites_.fetch_add(results.size(), std::memory_order_relaxed);
-    
+
+    // Check memory pressure before acquiring write lock
+    bool needsEviction = false;
+    if (memoryManager_) {
+        needsEviction = memoryManager_->hasMemoryPressure() || memoryManager_->hasEntryPressure();
+    }
+
+    std::unique_lock<std::shared_mutex> lock(cacheMutex_);
+
+    // Handle memory pressure if needed
+    if (needsEviction) {
+        size_t evicted = handleMemoryPressure();
+        std::cout << "Memory pressure detected during batch update, evicted " << evicted << " entries" << std::endl;
+    }
+
+    // Prepare current time once for all new entries
+    auto now = std::chrono::steady_clock::now();
+
     for (const auto& result : results) {
         auto it = cache_.find(result.id);
         if (it != cache_.end()) {
@@ -490,25 +542,31 @@ void CacheManager::updateCacheBatch(const std::vector<ReadResult>& results) {
             entry.status = result.success ? "Good" : "Bad";
             entry.reason = result.reason;
             entry.timestamp = result.timestamp;
-            entry.creationTime = std::chrono::steady_clock::now();
-            entry.lastAccessed.store(std::chrono::steady_clock::now());
+            entry.creationTime = now;
+            entry.lastAccessed.store(now);
             entry.hasSubscription.store(false);
-            
+
             cache_[result.id] = entry;
         }
     }
-    
+
+    // Update memory manager (use no-lock version since we already hold the lock)
+    if (memoryManager_) {
+        memoryManager_->updateCurrentEntryCount(cache_.size());
+        memoryManager_->updateCurrentMemoryUsage(getMemoryUsageNoLock());
+    }
+
     // Enforce size limit if necessary
     if (cache_.size() > maxCacheSize_) {
         enforceSizeLimit();
     }
-    
+
     std::cout << "Batch cache update completed for " << results.size() << " entries" << std::endl;
 }
 
 CacheManager::CacheStatus CacheManager::evaluateCacheStatus(const CacheEntry& entry) const {
     auto age = entry.getAge();
-    
+
     if (age < refreshThreshold_) {
         return CacheStatus::FRESH;
     } else if (age < expireTime_) {
@@ -538,7 +596,7 @@ void CacheManager::setCleanupInterval(std::chrono::seconds interval) {
 
 void CacheManager::recordCacheHit(CacheStatus status) const {
     totalHits_.fetch_add(1, std::memory_order_relaxed);
-    
+
     switch (status) {
         case CacheStatus::FRESH:
             freshHits_.fetch_add(1, std::memory_order_relaxed);
@@ -574,6 +632,127 @@ uint64_t CacheManager::getBatchOperations() const {
 
 uint64_t CacheManager::getConcurrentReadBlocks() const {
     return concurrentReadBlocks_.load(std::memory_order_relaxed);
+}
+
+CacheMemoryManager* CacheManager::getMemoryManager() {
+    return memoryManager_.get();
+}
+
+const CacheMemoryManager* CacheManager::getMemoryManager() const {
+    return memoryManager_.get();
+}
+
+size_t CacheManager::evictLRUEntries(size_t targetCount) {
+    std::unique_lock<std::shared_mutex> lock(cacheMutex_);
+
+    if (targetCount == 0 || cache_.empty()) {
+        return 0;
+    }
+
+    // Create vector of entries sorted by last accessed time (oldest first)
+    std::vector<std::pair<std::string, std::chrono::steady_clock::time_point>> entries;
+    entries.reserve(cache_.size());
+
+    for (const auto& pair : cache_) {
+        // Don't evict entries with active subscriptions
+        if (!pair.second.getSubscriptionStatus()) {
+            entries.emplace_back(pair.first, pair.second.getLastAccessed());
+        }
+    }
+
+    // Sort by last accessed time (oldest first)
+    std::sort(entries.begin(), entries.end(),
+              [](const auto& a, const auto& b) {
+                  return a.second < b.second;
+              });
+
+    // Remove oldest entries
+    size_t removedCount = 0;
+    size_t toRemove = std::min(targetCount, entries.size());
+
+    for (size_t i = 0; i < toRemove; ++i) {
+        auto it = cache_.find(entries[i].first);
+        if (it != cache_.end()) {
+            std::cout << "LRU evicting cache entry for node " << it->first << std::endl;
+
+            // Trigger eviction callback if set
+            if (memoryManager_) {
+                memoryManager_->triggerEvictionCallback(it->first, "lru");
+            }
+
+            cache_.erase(it);
+            ++removedCount;
+        }
+    }
+
+    // Update memory manager (use no-lock version since we already hold the lock)
+    if (memoryManager_ && removedCount > 0) {
+        memoryManager_->recordEviction(removedCount, "lru");
+        memoryManager_->updateCurrentEntryCount(cache_.size());
+        memoryManager_->updateCurrentMemoryUsage(getMemoryUsageNoLock());
+    }
+
+    std::cout << "LRU eviction removed " << removedCount << " entries" << std::endl;
+
+    return removedCount;
+}
+
+size_t CacheManager::handleMemoryPressure() {
+    // This method assumes unique_lock is already held
+
+    if (!memoryManager_ || !memoryManager_->isEnabled()) {
+        return 0;
+    }
+
+    // Calculate how many entries to evict
+    size_t evictionCount = memoryManager_->calculateEvictionCount(0.7); // Target 70% usage
+
+    if (evictionCount == 0) {
+        return 0;
+    }
+
+    std::cout << "Handling memory pressure, evicting " << evictionCount << " entries" << std::endl;
+
+    // Create vector of entries sorted by last accessed time (oldest first)
+    std::vector<std::pair<std::string, std::chrono::steady_clock::time_point>> entries;
+    entries.reserve(cache_.size());
+
+    for (const auto& pair : cache_) {
+        // Don't evict entries with active subscriptions
+        if (!pair.second.getSubscriptionStatus()) {
+            entries.emplace_back(pair.first, pair.second.getLastAccessed());
+        }
+    }
+
+    // Sort by last accessed time (oldest first)
+    std::sort(entries.begin(), entries.end(),
+              [](const auto& a, const auto& b) {
+                  return a.second < b.second;
+              });
+
+    // Remove oldest entries
+    size_t removedCount = 0;
+    size_t toRemove = std::min(evictionCount, entries.size());
+
+    for (size_t i = 0; i < toRemove; ++i) {
+        auto it = cache_.find(entries[i].first);
+        if (it != cache_.end()) {
+            // Trigger eviction callback if set
+            memoryManager_->triggerEvictionCallback(it->first, "memory_pressure");
+
+            cache_.erase(it);
+            ++removedCount;
+        }
+    }
+
+    // Update memory manager (use no-lock version since we already hold the lock)
+    if (removedCount > 0) {
+        memoryManager_->recordEviction(removedCount, "memory_pressure");
+        memoryManager_->updateCurrentEntryCount(cache_.size());
+        memoryManager_->updateCurrentMemoryUsage(getMemoryUsageNoLock());
+    }
+
+    return removedCount;
 }
 
 } // namespace opcua2http

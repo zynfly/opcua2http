@@ -344,7 +344,12 @@ std::vector<ReadResult> ReadStrategy::processExpiredNodes(const std::vector<std:
 
     spdlog::debug("Reading {} expired nodes from OPC UA server", nodeIds.size());
 
-    // Read from OPC UA server and update cache
+    // Use intelligent batching if enabled
+    if (intelligentBatchingEnabled_.load() && nodeIds.size() > optimalBatchSize_.load()) {
+        return processExpiredNodesWithBatching(nodeIds);
+    }
+
+    // Otherwise use standard read and update
     return readAndUpdateCache(nodeIds);
 }
 
@@ -404,6 +409,112 @@ uint64_t ReadStrategy::getCurrentTimestamp() {
     auto now = std::chrono::system_clock::now();
     auto duration = now.time_since_epoch();
     return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+}
+
+void ReadStrategy::setOptimalBatchSize(size_t batchSize) {
+    optimalBatchSize_.store(batchSize);
+    spdlog::info("Optimal batch size set to {}", batchSize);
+}
+
+size_t ReadStrategy::getOptimalBatchSize() const {
+    return optimalBatchSize_.load();
+}
+
+void ReadStrategy::setIntelligentBatchingEnabled(bool enabled) {
+    intelligentBatchingEnabled_.store(enabled);
+    spdlog::info("Intelligent batching {}", enabled ? "enabled" : "disabled");
+}
+
+bool ReadStrategy::isIntelligentBatchingEnabled() const {
+    return intelligentBatchingEnabled_.load();
+}
+
+std::vector<std::vector<std::string>> ReadStrategy::splitIntoOptimalBatches(
+    const std::vector<std::string>& nodeIds) {
+
+    std::vector<std::vector<std::string>> batches;
+
+    if (nodeIds.empty()) {
+        return batches;
+    }
+
+    size_t batchSize = optimalBatchSize_.load();
+
+    // If intelligent batching is disabled or batch size is 0, return single batch
+    if (!intelligentBatchingEnabled_.load() || batchSize == 0) {
+        batches.push_back(nodeIds);
+        return batches;
+    }
+
+    // Split into batches of optimal size
+    for (size_t i = 0; i < nodeIds.size(); i += batchSize) {
+        size_t end = std::min(i + batchSize, nodeIds.size());
+        std::vector<std::string> batch(nodeIds.begin() + i, nodeIds.begin() + end);
+        batches.push_back(batch);
+    }
+
+    spdlog::debug("Split {} nodes into {} batches of size ~{}",
+                  nodeIds.size(), batches.size(), batchSize);
+
+    return batches;
+}
+
+std::vector<ReadResult> ReadStrategy::processExpiredNodesWithBatching(
+    const std::vector<std::string>& nodeIds) {
+
+    if (nodeIds.empty()) {
+        return {};
+    }
+
+    std::vector<ReadResult> allResults;
+    allResults.reserve(nodeIds.size());
+
+    // Split into optimal batches
+    auto batches = splitIntoOptimalBatches(nodeIds);
+
+    spdlog::debug("Processing {} expired nodes in {} batches",
+                  nodeIds.size(), batches.size());
+
+    // Process each batch
+    for (const auto& batch : batches) {
+        try {
+            std::vector<ReadResult> batchResults;
+
+            // Use batch read for multiple nodes
+            if (batch.size() > 1) {
+                batchResults = opcClient_->readNodesBatch(batch);
+            } else if (batch.size() == 1) {
+                batchResults.push_back(opcClient_->readNode(batch[0]));
+            }
+
+            // Update cache with batch results
+            if (!batchResults.empty()) {
+                cacheManager_->updateCacheBatch(batchResults);
+                spdlog::debug("Updated cache with {} batch results", batchResults.size());
+            }
+
+            // Add to overall results
+            allResults.insert(allResults.end(), batchResults.begin(), batchResults.end());
+
+        } catch (const std::exception& e) {
+            spdlog::error("Error processing batch: {}", e.what());
+
+            // Handle batch failure with error handler or create error results
+            if (errorHandler_) {
+                for (const auto& nodeId : batch) {
+                    auto cachedData = cacheManager_->getCachedValue(nodeId);
+                    allResults.push_back(errorHandler_->handleConnectionError(nodeId, cachedData));
+                }
+            } else {
+                for (const auto& nodeId : batch) {
+                    allResults.push_back(createErrorResult(nodeId,
+                        std::string("Batch read error: ") + e.what()));
+                }
+            }
+        }
+    }
+
+    return allResults;
 }
 
 } // namespace opcua2http

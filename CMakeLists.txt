@@ -36,7 +36,9 @@ set(SOURCES
     src/core/CacheErrorHandler.cpp
     src/opcua/OPCUAClient.cpp
     src/cache/CacheManager.cpp
+    src/cache/CacheMemoryManager.cpp
     src/cache/CacheMetrics.cpp
+    src/cache/PerformanceMonitor.cpp
     src/subscription/SubscriptionManager.cpp
     src/reconnection/ReconnectionManager.cpp
     src/http/APIHandler.cpp
@@ -112,7 +114,9 @@ if(BUILD_TESTS)
         src/core/CacheErrorHandler.cpp
         src/opcua/OPCUAClient.cpp
         src/cache/CacheManager.cpp
+        src/cache/CacheMemoryManager.cpp
         src/cache/CacheMetrics.cpp
+        src/cache/PerformanceMonitor.cpp
         src/subscription/SubscriptionManager.cpp
         src/reconnection/ReconnectionManager.cpp
         src/http/APIHandler.cpp

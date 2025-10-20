@@ -144,6 +144,30 @@ public:
      */
     void setErrorHandler(CacheErrorHandler* errorHandler);
 
+    /**
+     * @brief Set optimal batch size for OPC UA reads
+     * @param batchSize Optimal batch size (default: 50)
+     */
+    void setOptimalBatchSize(size_t batchSize);
+
+    /**
+     * @brief Get optimal batch size
+     * @return Current optimal batch size
+     */
+    size_t getOptimalBatchSize() const;
+
+    /**
+     * @brief Enable or disable intelligent batching
+     * @param enabled Whether intelligent batching should be enabled
+     */
+    void setIntelligentBatchingEnabled(bool enabled);
+
+    /**
+     * @brief Check if intelligent batching is enabled
+     * @return True if intelligent batching is enabled
+     */
+    bool isIntelligentBatchingEnabled() const;
+
 private:
     // Dependencies
     CacheManager* cacheManager_;                              // Cache manager instance
@@ -157,6 +181,10 @@ private:
     std::condition_variable readCondition_;                  // Condition variable for waiting on active reads
     std::atomic<bool> concurrencyControlEnabled_{true};     // Whether concurrency control is enabled
     std::atomic<size_t> maxConcurrentReads_{10};            // Maximum concurrent read operations
+
+    // Batch optimization
+    std::atomic<size_t> optimalBatchSize_{50};              // Optimal batch size for OPC UA reads
+    std::atomic<bool> intelligentBatchingEnabled_{true};    // Whether intelligent batching is enabled
 
     /**
      * @brief Acquire read lock for a node ID to prevent duplicate concurrent reads
@@ -219,6 +247,22 @@ private:
      * @return Current Unix timestamp in milliseconds
      */
     uint64_t getCurrentTimestamp();
+
+    /**
+     * @brief Split nodes into optimal batch sizes for OPC UA reads
+     * @param nodeIds Vector of node identifiers to split
+     * @return Vector of batches, each with optimal size
+     */
+    std::vector<std::vector<std::string>> splitIntoOptimalBatches(
+        const std::vector<std::string>& nodeIds);
+
+    /**
+     * @brief Process expired nodes with intelligent batching
+     * @param nodeIds Vector of expired node identifiers
+     * @return Vector of ReadResults from OPC UA server
+     */
+    std::vector<ReadResult> processExpiredNodesWithBatching(
+        const std::vector<std::string>& nodeIds);
 };
 
 } // namespace opcua2http

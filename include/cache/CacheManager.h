@@ -8,13 +8,15 @@
 #include <shared_mutex>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include "core/ReadResult.h"
+#include "cache/CacheMemoryManager.h"
 
 namespace opcua2http {
 
 /**
  * @brief Thread-safe cache manager for OPC UA data points
- * 
+ *
  * This class manages a map-based cache of OPC UA node values with automatic
  * expiration and cleanup mechanisms. It provides thread-safe access using
  * shared_mutex for optimal read performance.
@@ -33,11 +35,11 @@ public:
         std::chrono::steady_clock::time_point creationTime;   // Cache entry creation time
         mutable std::atomic<std::chrono::steady_clock::time_point> lastAccessed; // Last access time (atomic for lock-free updates)
         std::atomic<bool> hasSubscription;                    // Whether this node has an active subscription (atomic)
-        
+
         // Custom constructors and assignment operators for atomic members
         CacheEntry() = default;
-        
-        CacheEntry(const CacheEntry& other) 
+
+        CacheEntry(const CacheEntry& other)
             : nodeId(other.nodeId)
             , value(other.value)
             , status(other.status)
@@ -46,7 +48,7 @@ public:
             , creationTime(other.creationTime)
             , lastAccessed(other.lastAccessed.load())
             , hasSubscription(other.hasSubscription.load()) {}
-            
+
         CacheEntry(CacheEntry&& other) noexcept
             : nodeId(std::move(other.nodeId))
             , value(std::move(other.value))
@@ -56,7 +58,7 @@ public:
             , creationTime(other.creationTime)
             , lastAccessed(other.lastAccessed.load())
             , hasSubscription(other.hasSubscription.load()) {}
-            
+
         CacheEntry& operator=(const CacheEntry& other) {
             if (this != &other) {
                 nodeId = other.nodeId;
@@ -70,7 +72,7 @@ public:
             }
             return *this;
         }
-        
+
         CacheEntry& operator=(CacheEntry&& other) noexcept {
             if (this != &other) {
                 nodeId = std::move(other.nodeId);
@@ -84,7 +86,7 @@ public:
             }
             return *this;
         }
-        
+
         /**
          * @brief Convert cache entry to ReadResult
          * @return ReadResult structure for API response
@@ -98,14 +100,14 @@ public:
                 timestamp
             };
         }
-        
+
         /**
          * @brief Update last accessed time atomically (lock-free)
          */
         void updateLastAccessed() const {
             lastAccessed.store(std::chrono::steady_clock::now(), std::memory_order_relaxed);
         }
-        
+
         /**
          * @brief Get last accessed time atomically
          * @return Last accessed time point
@@ -113,7 +115,7 @@ public:
         std::chrono::steady_clock::time_point getLastAccessed() const {
             return lastAccessed.load(std::memory_order_relaxed);
         }
-        
+
         /**
          * @brief Set subscription status atomically
          * @param subscriptionStatus New subscription status
@@ -121,7 +123,7 @@ public:
         void setSubscriptionStatus(bool subscriptionStatus) {
             hasSubscription.store(subscriptionStatus, std::memory_order_relaxed);
         }
-        
+
         /**
          * @brief Get subscription status atomically
          * @return Current subscription status
@@ -129,7 +131,7 @@ public:
         bool getSubscriptionStatus() const {
             return hasSubscription.load(std::memory_order_relaxed);
         }
-        
+
         /**
          * @brief Check if cache entry is within refresh threshold
          * @param threshold Refresh threshold duration
@@ -139,7 +141,7 @@ public:
             auto age = getAge();
             return age < threshold;
         }
-        
+
         /**
          * @brief Check if cache entry is expired
          * @param expireTime Expiration duration
@@ -149,7 +151,7 @@ public:
             auto age = getAge();
             return age >= expireTime;
         }
-        
+
         /**
          * @brief Get age of cache entry
          * @return Duration since creation
@@ -211,7 +213,7 @@ public:
      * @param refreshThresholdSeconds Refresh threshold in seconds (default: 3)
      * @param expireTimeSeconds Expiration time in seconds (default: 10)
      */
-    explicit CacheManager(int cacheExpireMinutes = 60, 
+    explicit CacheManager(int cacheExpireMinutes = 60,
                          size_t maxCacheSize = 10000,
                          int refreshThresholdSeconds = 3,
                          int expireTimeSeconds = 10);
@@ -254,10 +256,10 @@ public:
      * @param reason Status description
      * @param timestamp Unix timestamp in milliseconds
      */
-    void updateCache(const std::string& nodeId, 
-                    const std::string& value, 
-                    const std::string& status, 
-                    const std::string& reason, 
+    void updateCache(const std::string& nodeId,
+                    const std::string& value,
+                    const std::string& status,
+                    const std::string& reason,
                     uint64_t timestamp);
 
     /**
@@ -360,6 +362,31 @@ public:
     double getHitRatio() const;
 
     /**
+     * @brief Get memory manager
+     * @return Pointer to memory manager
+     */
+    CacheMemoryManager* getMemoryManager();
+
+    /**
+     * @brief Get memory manager (const)
+     * @return Const pointer to memory manager
+     */
+    const CacheMemoryManager* getMemoryManager() const;
+
+    /**
+     * @brief Perform LRU eviction to free memory
+     * @param targetCount Number of entries to evict
+     * @return Number of entries actually evicted
+     */
+    size_t evictLRUEntries(size_t targetCount);
+
+    /**
+     * @brief Check and handle memory pressure
+     * @return Number of entries evicted
+     */
+    size_t handleMemoryPressure();
+
+    /**
      * @brief Get fresh cache hits count
      * @return Number of fresh cache hits
      */
@@ -424,6 +451,9 @@ private:
     mutable std::shared_mutex cacheMutex_;                    // Reader-writer lock for thread safety
     std::unordered_map<std::string, CacheEntry> cache_;      // Main cache storage
 
+    // Memory management
+    std::unique_ptr<CacheMemoryManager> memoryManager_;      // Memory manager for LRU eviction
+
     // Configuration
     std::chrono::minutes cacheExpireTime_;                   // Cache expiration time (legacy)
     std::chrono::seconds refreshThreshold_;                  // Refresh threshold for smart caching
@@ -465,7 +495,7 @@ private:
      * @return Number of batch operations performed
      */
     uint64_t getBatchOperations() const;
-    
+
     /**
      * @brief Get concurrent read blocks count
      * @return Number of times concurrent reads were blocked
@@ -485,6 +515,12 @@ private:
      * @return Estimated memory usage in bytes
      */
     size_t calculateEntrySize(const CacheEntry& entry) const;
+
+    /**
+     * @brief Get memory usage without acquiring lock (internal use only)
+     * @return Estimated memory usage in bytes
+     */
+    size_t getMemoryUsageNoLock() const;
 
     /**
      * @brief Evaluate cache status based on entry age and timing configuration
