@@ -13,10 +13,12 @@ namespace opcua2http {
 APIHandler::APIHandler(CacheManager* cacheManager,
                       ReadStrategy* readStrategy,
                       OPCUAClient* opcClient,
-                      const Configuration& config)
+                      const Configuration& config,
+                      CacheMetrics* cacheMetrics)
     : cacheManager_(cacheManager)
     , readStrategy_(readStrategy)
     , opcClient_(opcClient)
+    , cacheMetrics_(cacheMetrics)
     , config_(config)
     , startTime_(std::chrono::steady_clock::now())
 {
@@ -197,6 +199,37 @@ crow::response APIHandler::handleHealthRequest() {
             {"version", "1.0.0"}
         };
 
+        // Add enhanced cache metrics if available
+        if (cacheMetrics_) {
+            auto cacheStats = cacheMetrics_->getStatistics();
+
+            health["cache"] = {
+                {"hit_ratio", cacheStats.hitRatio},
+                {"fresh_entries", cacheStats.freshEntries},
+                {"stale_entries", cacheStats.staleEntries},
+                {"expired_entries", cacheStats.expiredEntries},
+                {"efficiency_score", cacheStats.getCacheEfficiency()},
+                {"is_healthy", cacheStats.isHealthy()}
+            };
+
+            // Add health status based on cache health
+            // Only mark as degraded if we have enough data to make a meaningful assessment
+            if (cacheStats.totalRequests >= 10 && !cacheStats.isHealthy()) {
+                health["status"] = "degraded";
+                health["warnings"] = nlohmann::json::array();
+
+                if (cacheStats.hitRatio < 0.7) {
+                    health["warnings"].push_back("Low cache hit ratio");
+                }
+                if (cacheStats.freshHitRatio < 0.5) {
+                    health["warnings"].push_back("Low fresh hit ratio");
+                }
+                if (cacheStats.expiredReadRatio > 0.2) {
+                    health["warnings"].push_back("High expired read ratio");
+                }
+            }
+        }
+
         return buildJSONResponse(health);
 
     } catch (const std::exception& e) {
@@ -238,6 +271,11 @@ crow::response APIHandler::handleStatusRequest() {
                 {"average_response_time_ms", stats.averageResponseTimeMs}
             }}
         };
+
+        // Add enhanced cache metrics if available
+        if (cacheMetrics_) {
+            status["cache_metrics"] = cacheMetrics_->getMetricsJSON(true);
+        }
 
         return buildJSONResponse(status);
 

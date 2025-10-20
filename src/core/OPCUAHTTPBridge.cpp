@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 #include "opcua/OPCUAClient.h"
 #include "cache/CacheManager.h"
+#include "cache/CacheMetrics.h"
 #include "core/ReadStrategy.h"
 #include "core/BackgroundUpdater.h"
 #include "http/APIHandler.h"
@@ -310,6 +311,13 @@ bool OPCUAHTTPBridge::initializeComponents() {
                      config_->backgroundUpdateQueueSize,
                      config_->backgroundUpdateTimeoutMs);
 
+        // Initialize CacheMetrics
+        cacheMetrics_ = std::make_unique<CacheMetrics>(
+            cacheManager_.get(),
+            backgroundUpdater_.get()
+        );
+        spdlog::debug("Cache metrics initialized");
+
         // Initialize ReadStrategy
         readStrategy_ = std::make_unique<ReadStrategy>(
             cacheManager_.get(),
@@ -330,7 +338,8 @@ bool OPCUAHTTPBridge::initializeComponents() {
             cacheManager_.get(),
             readStrategy_.get(),
             opcClient_.get(),
-            *config_
+            *config_,
+            cacheMetrics_.get()
         );
         spdlog::debug("API handler initialized");
 
@@ -386,6 +395,9 @@ void OPCUAHTTPBridge::cleanup() {
         readStrategy_.reset();
         spdlog::debug("Read strategy cleaned up");
 
+        cacheMetrics_.reset();
+        spdlog::debug("Cache metrics cleaned up");
+
         backgroundUpdater_.reset();
         spdlog::debug("Background updater cleaned up");
 
@@ -417,6 +429,13 @@ std::string OPCUAHTTPBridge::getStatus() const {
         // Get background updater statistics
         auto bgStats = backgroundUpdater_ ? backgroundUpdater_->getStats() : BackgroundUpdater::UpdateStats{};
 
+        // Get enhanced cache metrics if available
+        std::string cacheMetricsJson = "null";
+        if (cacheMetrics_) {
+            auto metricsJson = cacheMetrics_->getMetricsJSON(true);
+            cacheMetricsJson = metricsJson.dump();
+        }
+
         // Build status JSON
         std::string status = R"({
   "service": "opcua-http-bridge",
@@ -431,6 +450,7 @@ std::string OPCUAHTTPBridge::getStatus() const {
     "total_misses": )" + std::to_string(cacheStats.totalMisses) + R"(,
     "hit_ratio": )" + std::to_string(cacheStats.hitRatio) + R"(
   },
+  "cache_metrics": )" + cacheMetricsJson + R"(,
   "background_updates": {
     "total_updates": )" + std::to_string(bgStats.totalUpdates) + R"(,
     "successful_updates": )" + std::to_string(bgStats.successfulUpdates) + R"(,

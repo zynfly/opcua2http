@@ -13,6 +13,7 @@ namespace opcua2http {
 // Forward declarations
 class OPCUAClient;
 class CacheManager;
+class CacheMetrics;
 class APIHandler;
 class ReadStrategy;
 class BackgroundUpdater;
@@ -82,6 +83,7 @@ private:
     // Core components
     std::unique_ptr<OPCUAClient> opcClient_;
     std::unique_ptr<CacheManager> cacheManager_;
+    std::unique_ptr<CacheMetrics> cacheMetrics_;
     std::unique_ptr<ReadStrategy> readStrategy_;
     std::unique_ptr<BackgroundUpdater> backgroundUpdater_;
     std::unique_ptr<APIHandler> apiHandler_;

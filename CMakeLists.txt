@@ -35,6 +35,7 @@ set(SOURCES
     src/core/BackgroundUpdater.cpp
     src/opcua/OPCUAClient.cpp
     src/cache/CacheManager.cpp
+    src/cache/CacheMetrics.cpp
     src/subscription/SubscriptionManager.cpp
     src/reconnection/ReconnectionManager.cpp
     src/http/APIHandler.cpp
@@ -44,8 +45,8 @@ set(SOURCES
 add_executable(opcua2http ${SOURCES})
 
 # Link libraries
-target_link_libraries(opcua2http 
-    PRIVATE 
+target_link_libraries(opcua2http
+    PRIVATE
     open62541::open62541
     Crow::Crow
     nlohmann_json::nlohmann_json
@@ -75,16 +76,16 @@ option(BUILD_TESTS "Build unit tests" ON)
 if(BUILD_TESTS)
     # Find Google Test
     find_package(GTest REQUIRED)
-    
+
     # Enable testing
     enable_testing()
-    
+
     # Common test infrastructure
     set(TEST_COMMON_SOURCES
         tests/common/MockOPCUAServer.cpp
         tests/common/OPCUATestBase.cpp
     )
-    
+
     # Test source files
     set(TEST_SOURCES
         tests/test_main.cpp
@@ -109,18 +110,19 @@ if(BUILD_TESTS)
         src/core/BackgroundUpdater.cpp
         src/opcua/OPCUAClient.cpp
         src/cache/CacheManager.cpp
+        src/cache/CacheMetrics.cpp
         src/subscription/SubscriptionManager.cpp
         src/reconnection/ReconnectionManager.cpp
         src/http/APIHandler.cpp
         ${TEST_COMMON_SOURCES}
     )
-    
+
     # Create test executable
     add_executable(opcua2http_tests ${TEST_SOURCES})
-    
+
     # Link test libraries
-    target_link_libraries(opcua2http_tests 
-        PRIVATE 
+    target_link_libraries(opcua2http_tests
+        PRIVATE
         open62541::open62541
         Crow::Crow
         nlohmann_json::nlohmann_json
@@ -129,10 +131,10 @@ if(BUILD_TESTS)
         GTest::gmock
         Threads::Threads
     )
-    
+
     # Include directories for tests
     target_include_directories(opcua2http_tests PRIVATE include tests)
-    
+
     # Compiler-specific options for tests
     if(MSVC)
         target_compile_options(opcua2http_tests PRIVATE /W4 /bigobj)
@@ -140,12 +142,12 @@ if(BUILD_TESTS)
     else()
         target_compile_options(opcua2http_tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
-    
+
     # Platform-specific definitions for tests
     if(WIN32)
         target_compile_definitions(opcua2http_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
-    
+
     # Register tests with CTest
     include(GoogleTest)
     gtest_discover_tests(opcua2http_tests)
