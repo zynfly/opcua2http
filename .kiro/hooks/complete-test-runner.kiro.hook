@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "name": "Complete Test Runner",
+  "description": "Automatically compiles and runs the complete test suite whenever the AI believes work is completed to verify no errors exist",
+  "version": "1",
+  "when": {
+    "type": "userTriggered",
+    "patterns": [
+      "src/**/*.cpp",
+      "src/**/*.h",
+      "include/**/*.h",
+      "tests/**/*.cpp",
+      "tests/**/*.h",
+      "main.cpp",
+      "CMakeLists.txt"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "The AI has completed work on the codebase. You must now run the complete test suite to verify everything works correctly. First compile the tests with: cmake --build cmake-build-debug --target opcua2http_tests. Then execute the full test suite with: cmake-build-debug/Debug/opcua2http_tests.exe. Check for any compilation errors or test failures and report the results. If there are any issues, they must be fixed before the work can be considered complete."
+  }
+}

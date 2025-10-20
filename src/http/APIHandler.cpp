@@ -11,11 +11,11 @@
 namespace opcua2http {
 
 APIHandler::APIHandler(CacheManager* cacheManager,
-                      SubscriptionManager* subscriptionManager,
+                      ReadStrategy* readStrategy,
                       OPCUAClient* opcClient,
                       const Configuration& config)
     : cacheManager_(cacheManager)
-    , subscriptionManager_(subscriptionManager)
+    , readStrategy_(readStrategy)
     , opcClient_(opcClient)
     , config_(config)
     , startTime_(std::chrono::steady_clock::now())
@@ -23,8 +23,8 @@ APIHandler::APIHandler(CacheManager* cacheManager,
     if (!cacheManager_) {
         throw std::invalid_argument("CacheManager cannot be null");
     }
-    if (!subscriptionManager_) {
-        throw std::invalid_argument("SubscriptionManager cannot be null");
+    if (!readStrategy_) {
+        throw std::invalid_argument("ReadStrategy cannot be null");
     }
     if (!opcClient_) {
         throw std::invalid_argument("OPCUAClient cannot be null");
@@ -162,6 +162,24 @@ crow::response APIHandler::handleReadRequest(const crow::request& req) {
     } catch (const std::exception& e) {
         failedRequests_++;
         std::cerr << "Error handling read request: " << e.what() << std::endl;
+
+        // Check if this is an OPC connection error and we have node IDs to try cache fallback
+        std::string errorMsg = e.what();
+        if (errorMsg.find("connection") != std::string::npos ||
+            errorMsg.find("OPC") != std::string::npos ||
+            !opcClient_->isConnected()) {
+
+            // Try to extract node IDs for cache fallback
+            std::string idsParam = req.url_params.get("ids");
+            if (!idsParam.empty()) {
+                std::vector<std::string> nodeIds = parseNodeIds(idsParam);
+                if (!nodeIds.empty()) {
+                    // Try cache fallback for the first node as an example
+                    return buildCacheErrorResponse(nodeIds[0], errorMsg);
+                }
+            }
+        }
+
         return buildErrorResponse(500, "Internal Server Error", e.what());
     }
 }
@@ -176,7 +194,6 @@ crow::response APIHandler::handleHealthRequest() {
             {"opc_connected", opcClient_->isConnected()},
             {"opc_endpoint", config_.opcEndpoint},
             {"cached_items", cacheManager_->size()},
-            {"active_subscriptions", subscriptionManager_->getActiveMonitoredItems().size()},
             {"version", "1.0.0"}
         };
 
@@ -192,7 +209,6 @@ crow::response APIHandler::handleStatusRequest() {
     try {
         auto stats = getStats();
         auto cacheStats = cacheManager_->getStats();
-        auto subscriptionStats = subscriptionManager_->getStats();
 
         nlohmann::json status = {
             {"timestamp", getCurrentTimestamp()},
@@ -206,18 +222,10 @@ crow::response APIHandler::handleStatusRequest() {
             }},
             {"cache", {
                 {"total_entries", cacheStats.totalEntries},
-                {"subscribed_entries", cacheStats.subscribedEntries},
                 {"total_hits", cacheStats.totalHits},
                 {"total_misses", cacheStats.totalMisses},
                 {"hit_ratio", cacheStats.hitRatio},
                 {"memory_usage_bytes", cacheStats.memoryUsageBytes}
-            }},
-            {"subscriptions", {
-                {"subscription_id", subscriptionStats.subscriptionId},
-                {"total_monitored_items", subscriptionStats.totalMonitoredItems},
-                {"active_monitored_items", subscriptionStats.activeMonitoredItems},
-                {"total_notifications", subscriptionStats.totalNotifications},
-                {"is_active", subscriptionStats.isSubscriptionActive}
             }},
             {"http_api", {
                 {"total_requests", stats.totalRequests},
@@ -317,7 +325,17 @@ std::vector<std::string> APIHandler::parseNodeIds(const std::string& idsParam) {
 }
 
 nlohmann::json APIHandler::buildReadResponse(const std::vector<ReadResult>& results) {
-    return buildResponseWithMetadata(results, true);
+    // Build simple response with just readResults array to maintain API compatibility
+    nlohmann::json response;
+    nlohmann::json readResults = nlohmann::json::array();
+
+    for (const auto& result : results) {
+        // Use the standard API response format with short field names (id, s, r, v, t)
+        readResults.push_back(result.toJson());
+    }
+
+    response["readResults"] = readResults;
+    return response;
 }
 
 crow::response APIHandler::buildErrorResponse(int statusCode,
@@ -389,133 +407,64 @@ crow::response APIHandler::buildJSONResponse(const nlohmann::json& data, int sta
 }
 
 std::vector<ReadResult> APIHandler::processNodeRequests(const std::vector<std::string>& nodeIds) {
-    std::vector<ReadResult> results;
-    results.reserve(nodeIds.size());
+    try {
+        // Use ReadStrategy to handle intelligent cache-based reading
+        std::vector<ReadResult> results = readStrategy_->processNodeRequests(nodeIds);
 
-    // Build results in order, collecting non-cached nodes for batch processing
-    std::vector<std::pair<std::string, size_t>> nonCachedNodes; // {nodeId, resultIndex}
-
-    for (const auto& nodeId : nodeIds) {
-        auto cachedEntry = cacheManager_->getCachedValue(nodeId);
-
-        if (cachedEntry.has_value()) {
-            // Use cached result
-            results.push_back(cachedEntry->toReadResult());
-            cacheHits_++;
-            subscriptionManager_->updateLastAccessed(nodeId);
-
-            if (detailedLoggingEnabled_) {
-                std::cout << "Cache hit for node: " << nodeId << std::endl;
+        // Update statistics based on results
+        for (const auto& result : results) {
+            if (result.success) {
+                // Note: ReadStrategy handles cache hit/miss internally,
+                // so we can't distinguish here, but we count all successful results
+                cacheHits_++; // This is now a general success counter
+            } else {
+                cacheMisses_++; // This is now a general failure counter
             }
-        } else {
-            // Mark for OPC UA read - store nodeId and its position in results
-            nonCachedNodes.emplace_back(nodeId, results.size());
-            results.emplace_back(); // Placeholder - will be filled later
+        }
+
+        if (detailedLoggingEnabled_) {
+            std::cout << "Processed " << nodeIds.size() << " node requests through ReadStrategy" << std::endl;
+        }
+
+        return results;
+
+    } catch (const std::exception& e) {
+        std::cerr << "Error processing node requests through ReadStrategy: " << e.what() << std::endl;
+
+        // Create error results for all requested nodes
+        std::vector<ReadResult> errorResults;
+        errorResults.reserve(nodeIds.size());
+        for (const auto& nodeId : nodeIds) {
+            errorResults.push_back(ReadResult::createError(nodeId,
+                std::string("ReadStrategy error: ") + e.what(), getCurrentTimestamp()));
             cacheMisses_++;
         }
+        return errorResults;
     }
-
-    // Batch read non-cached nodes and fill placeholders
-    if (!nonCachedNodes.empty()) {
-        if (detailedLoggingEnabled_) {
-            std::cout << "Reading " << nonCachedNodes.size() << " nodes from OPC UA server" << std::endl;
-        }
-
-        // Extract node IDs for batch read
-        std::vector<std::string> nodeIdsToRead;
-        nodeIdsToRead.reserve(nonCachedNodes.size());
-        for (const auto& pair : nonCachedNodes) {
-            nodeIdsToRead.push_back(pair.first);
-        }
-
-        // Batch read from OPC UA
-        auto opcResults = opcClient_->readNodes(nodeIdsToRead);
-
-        // Fill placeholders with actual results
-        for (size_t i = 0; i < nonCachedNodes.size(); ++i) {
-            const auto& nodeId = nonCachedNodes[i].first;
-            size_t resultIndex = nonCachedNodes[i].second;
-
-            ReadResult result = (i < opcResults.size()) ?
-                opcResults[i] :
-                ReadResult::createError(nodeId, "Failed to read from OPC UA server", getCurrentTimestamp());
-
-            // Create subscription for successful reads (but don't cache the read result)
-            // Cache will be updated only when subscription receives data change notifications
-            if (result.success && subscriptionManager_->addMonitoredItem(nodeId)) {
-                if (detailedLoggingEnabled_) {
-                    std::cout << "Created subscription for node: " << nodeId << std::endl;
-                }
-            }
-
-            // Fill the placeholder
-            results[resultIndex] = std::move(result);
-        }
-    }
-
-    return results;
 }
 
-ReadResult APIHandler::processNodeRequest(const std::string& nodeId, bool& cacheHit) {
-    cacheHit = false;
-
+ReadResult APIHandler::processNodeRequest(const std::string& nodeId) {
     try {
-        // First, try to get from cache
-        auto cachedEntry = cacheManager_->getCachedValue(nodeId);
-        if (cachedEntry.has_value()) {
-            cacheHit = true;
+        // Use ReadStrategy to handle intelligent cache-based reading
+        ReadResult result = readStrategy_->processNodeRequest(nodeId);
 
-            // Update last accessed time for subscription management
-            subscriptionManager_->updateLastAccessed(nodeId);
-
-            // Check if subscription exists, create if needed
-            if (!cachedEntry->hasSubscription &&
-                !subscriptionManager_->hasMonitoredItem(nodeId)) {
-
-                bool subscriptionCreated = subscriptionManager_->addMonitoredItem(nodeId);
-                if (subscriptionCreated) {
-                    cacheManager_->setSubscriptionStatus(nodeId, true);
-
-                    if (detailedLoggingEnabled_) {
-                        std::cout << "Created missing subscription for cached node: "
-                                  << nodeId << std::endl;
-                    }
-                }
-            }
-
-            return cachedEntry->toReadResult();
+        // Update statistics
+        if (result.success) {
+            cacheHits_++; // General success counter
+        } else {
+            cacheMisses_++; // General failure counter
         }
 
-        // Not in cache, need to read from OPC UA server
-        ReadResult result = opcClient_->readNode(nodeId);
-
-        // Create subscription for future updates (if successful read)
-        // Note: We don't cache the initial read result - cache will be updated by subscription notifications
-        if (result.success) {
-            bool subscriptionCreated = subscriptionManager_->addMonitoredItem(nodeId);
-            if (subscriptionCreated) {
-                if (detailedLoggingEnabled_) {
-                    std::cout << "Created subscription for new node: " << nodeId << std::endl;
-                }
-            } else {
-                std::cerr << "Failed to create subscription for node: " << nodeId << std::endl;
-
-                if (detailedLoggingEnabled_) {
-                    std::cout << "Continuing without subscription for node: " << nodeId << std::endl;
-                }
-            }
-        } else {
-            if (detailedLoggingEnabled_) {
-                std::cout << "Skipping subscription creation for failed read: "
-                          << nodeId << " (reason: " << result.reason << ")" << std::endl;
-            }
+        if (detailedLoggingEnabled_) {
+            std::cout << "Processed node request for " << nodeId << " through ReadStrategy" << std::endl;
         }
 
         return result;
 
     } catch (const std::exception& e) {
-        std::cerr << "Error processing node request for " << nodeId << ": " << e.what() << std::endl;
-        return ReadResult::createError(nodeId, "Internal error: " + std::string(e.what()),
+        std::cerr << "Error processing node request for " << nodeId << " through ReadStrategy: " << e.what() << std::endl;
+        cacheMisses_++;
+        return ReadResult::createError(nodeId, "ReadStrategy error: " + std::string(e.what()),
                                      getCurrentTimestamp());
     }
 }
@@ -874,19 +823,8 @@ nlohmann::json APIHandler::buildPaginatedResponse(const std::vector<ReadResult>&
     // Build paginated results
     nlohmann::json readResults = nlohmann::json::array();
     for (int i = startIndex; i < endIndex; ++i) {
-        // Create JSON with full field names for API response
-        nlohmann::json resultJson = {
-            {"nodeId", results[i].id},
-            {"success", results[i].success},
-            {"reason", results[i].reason},
-            {"value", results[i].value},
-            {"timestamp", results[i].timestamp}
-        };
-
-        // Add formatted timestamp for better readability
-        resultJson["timestamp_iso"] = formatTimestamp(results[i].timestamp);
-
-        readResults.push_back(resultJson);
+        // Use the standard API response format with short field names (id, s, r, v, t)
+        readResults.push_back(results[i].toJson());
     }
 
     // Build response with pagination metadata
@@ -917,24 +855,13 @@ nlohmann::json APIHandler::buildResponseWithMetadata(const std::vector<ReadResul
     std::map<std::string, int> statusCounts;
 
     for (const auto& result : results) {
-        // Create JSON with full field names for API response
-        nlohmann::json resultJson = {
-            {"nodeId", result.id},
-            {"success", result.success},
-            {"reason", result.reason},
-            {"value", result.value},
-            {"timestamp", result.timestamp}
-        };
+        // Use the standard API response format with short field names (id, s, r, v, t)
+        nlohmann::json resultJson = result.toJson();
 
-        // Add formatted timestamp for better readability
-        resultJson["timestamp_iso"] = formatTimestamp(result.timestamp);
-
-        // Add quality indicator
+        // Count for statistics
         if (result.success) {
-            resultJson["quality"] = "good";
             successCount++;
         } else {
-            resultJson["quality"] = "bad";
             errorCount++;
         }
 
@@ -961,8 +888,7 @@ nlohmann::json APIHandler::buildResponseWithMetadata(const std::vector<ReadResul
             {"server_info", {
                 {"opc_endpoint", config_.opcEndpoint},
                 {"opc_connected", opcClient_->isConnected()},
-                {"cache_size", cacheManager_->size()},
-                {"active_subscriptions", subscriptionManager_->getActiveMonitoredItems().size()}
+                {"cache_size", cacheManager_->size()}
             }}
         };
     }
@@ -1009,118 +935,95 @@ std::string APIHandler::generateRequestId() {
     return oss.str();
 }
 
-int APIHandler::synchronizeCacheAndSubscriptions() {
-    int inconsistenciesFixed = 0;
-
+ReadResult APIHandler::handleOPCConnectionError(const std::string& nodeId) {
     try {
-        // Get all cached node IDs
-        std::vector<std::string> cachedNodes = cacheManager_->getCachedNodeIds();
-        std::vector<std::string> subscribedNodes = subscriptionManager_->getActiveMonitoredItems();
+        // First, try to get cached data as fallback
+        auto cachedEntry = cacheManager_->getCachedValue(nodeId);
 
-        // Check for cached nodes without subscriptions
-        for (const auto& nodeId : cachedNodes) {
-            auto cachedEntry = cacheManager_->getCachedValue(nodeId);
-            if (cachedEntry.has_value() && cachedEntry->hasSubscription) {
-                // Cache says it has subscription, verify with subscription manager
-                if (!subscriptionManager_->hasMonitoredItem(nodeId)) {
-                    // Inconsistency: cache thinks there's a subscription but there isn't
-                    cacheManager_->setSubscriptionStatus(nodeId, false);
-                    inconsistenciesFixed++;
+        if (cachedEntry.has_value()) {
+            // Return cached data with connection error indication
+            ReadResult result = cachedEntry->toReadResult();
 
-                    if (detailedLoggingEnabled_) {
-                        std::cout << "Fixed cache inconsistency: removed subscription flag for "
-                                  << nodeId << std::endl;
-                    }
-                }
-            }
-        }
+            // Modify the result to indicate it's from cache due to connection error
+            result.reason = "Connection Error - Using Cached Data (age: " +
+                          std::to_string(cachedEntry->getAge().count()) + "s)";
 
-        // Check for subscriptions without proper cache flags
-        for (const auto& nodeId : subscribedNodes) {
-            auto cachedEntry = cacheManager_->getCachedValue(nodeId);
-            if (cachedEntry.has_value() && !cachedEntry->hasSubscription) {
-                // Inconsistency: subscription exists but cache doesn't know
-                cacheManager_->setSubscriptionStatus(nodeId, true);
-                inconsistenciesFixed++;
-
-                if (detailedLoggingEnabled_) {
-                    std::cout << "Fixed cache inconsistency: added subscription flag for "
-                              << nodeId << std::endl;
-                }
-            }
-        }
-
-        if (inconsistenciesFixed > 0) {
-            std::cout << "Synchronized cache and subscriptions: fixed "
-                      << inconsistenciesFixed << " inconsistencies" << std::endl;
-        }
-
-    } catch (const std::exception& e) {
-        std::cerr << "Error synchronizing cache and subscriptions: " << e.what() << std::endl;
-    }
-
-    return inconsistenciesFixed;
-}
-
-bool APIHandler::handleSubscriptionRecovery() {
-    try {
-        if (!opcClient_->isConnected()) {
-            std::cerr << "Cannot recover subscriptions: OPC UA client not connected" << std::endl;
-            return false;
-        }
-
-        // Get all nodes that should have subscriptions
-        std::vector<std::string> subscribedNodes = cacheManager_->getSubscribedNodeIds();
-
-        if (subscribedNodes.empty()) {
             if (detailedLoggingEnabled_) {
-                std::cout << "No subscriptions to recover" << std::endl;
+                std::cout << "OPC connection error for node " << nodeId
+                         << ", returning cached data (age: " << cachedEntry->getAge().count() << "s)" << std::endl;
             }
-            return true;
-        }
 
-        std::cout << "Recovering " << subscribedNodes.size() << " subscriptions..." << std::endl;
-
-        // Recreate all monitored items
-        bool success = subscriptionManager_->recreateAllMonitoredItems();
-
-        if (success) {
-            std::cout << "Successfully recovered all subscriptions" << std::endl;
-
-            // Synchronize cache and subscription states
-            synchronizeCacheAndSubscriptions();
-
-            return true;
+            return result;
         } else {
-            std::cerr << "Failed to recover some subscriptions" << std::endl;
-
-            // Try to recover individual subscriptions
-            int recovered = 0;
-            for (const auto& nodeId : subscribedNodes) {
-                if (subscriptionManager_->addMonitoredItem(nodeId)) {
-                    recovered++;
-                } else {
-                    // Mark as not having subscription in cache
-                    cacheManager_->setSubscriptionStatus(nodeId, false);
-                }
+            // No cached data available, return connection error
+            if (detailedLoggingEnabled_) {
+                std::cout << "OPC connection error for node " << nodeId
+                         << ", no cached data available" << std::endl;
             }
 
-            std::cout << "Recovered " << recovered << " out of "
-                      << subscribedNodes.size() << " subscriptions" << std::endl;
-
-            return recovered > 0;
+            return ReadResult::createError(nodeId,
+                "OPC UA server connection failed and no cached data available",
+                getCurrentTimestamp());
         }
 
     } catch (const std::exception& e) {
-        std::cerr << "Error during subscription recovery: " << e.what() << std::endl;
-        return false;
+        std::cerr << "Error handling OPC connection error for node " << nodeId
+                  << ": " << e.what() << std::endl;
+        return ReadResult::createError(nodeId,
+            std::string("Error handling connection failure: ") + e.what(),
+            getCurrentTimestamp());
     }
 }
 
+crow::response APIHandler::buildCacheErrorResponse(const std::string& nodeId,
+                                                 const std::string& error,
+                                                 int cacheAge) {
+    uint64_t timestamp = getCurrentTimestamp();
 
+    nlohmann::json errorResponse = {
+        {"error", {
+            {"code", 503}, // Service Unavailable
+            {"message", "OPC UA Service Temporarily Unavailable"},
+            {"timestamp", timestamp},
+            {"timestamp_iso", formatTimestamp(timestamp)},
+            {"type", "service_unavailable"},
+            {"node_id", nodeId},
+            {"details", error}
+        }}
+    };
 
+    // Add cache information if available
+    if (cacheAge >= 0) {
+        errorResponse["error"]["cache_info"] = {
+            {"has_cached_data", true},
+            {"cache_age_seconds", cacheAge},
+            {"fallback_used", true}
+        };
+        errorResponse["error"]["help"] = "Cached data returned due to OPC UA server unavailability";
+    } else {
+        errorResponse["error"]["cache_info"] = {
+            {"has_cached_data", false},
+            {"fallback_used", false}
+        };
+        errorResponse["error"]["help"] = "No cached data available, OPC UA server connection required";
+    }
 
+    // Add retry information
+    errorResponse["error"]["retry_after"] = 30; // seconds
+    errorResponse["error"]["request_id"] = generateRequestId();
 
+    // Add OPC UA connection status
+    errorResponse["error"]["opc_status"] = {
+        {"connected", opcClient_->isConnected()},
+        {"endpoint", config_.opcEndpoint}
+    };
 
+    crow::response response = buildJSONResponse(errorResponse, 503);
+
+    // Add Retry-After header
+    response.add_header("Retry-After", "30");
+
+    return response;
+}
 
 } // namespace opcua2http

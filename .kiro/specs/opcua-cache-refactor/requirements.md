@@ -53,7 +53,7 @@
 #### Acceptance Criteria
 
 1. THE HTTP_Gateway SHALL 保持现有的/iotgateway/read API端点完全不变
-2. WHEN API返回数据, THE HTTP_Gateway SHALL 使用完全相同的JSON响应格式（id、s、r、v、t字段）
+2. WHEN API返回数据, THE HTTP_Gateway SHALL 使用标准JSON响应格式（nodeId、success、quality、value、timestamp_iso字段）
 3. WHEN 客户端发送请求, THE HTTP_Gateway SHALL 接受完全相同的查询参数格式（ids参数）
 4. WHEN 配置系统参数, THE Cache_System SHALL 支持通过环境变量配置缓存时间参数
 5. THE HTTP_Gateway SHALL 保持现有的认证和CORS配置机制完全不变

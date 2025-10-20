@@ -1,0 +1,29 @@
+{
+  "enabled": true,
+  "name": "Auto Commit Code Changes",
+  "description": "Analyzes all recent code changes in the project, provides a comprehensive summary of modifications, and commits all changes to git with an appropriate commit message",
+  "version": "1",
+  "when": {
+    "type": "userTriggered",
+    "patterns": [
+      "**/*.cpp",
+      "**/*.h",
+      "**/*.hpp",
+      "**/*.c",
+      "**/*.cc",
+      "**/*.cxx",
+      "CMakeLists.txt",
+      "**/*.cmake",
+      "**/*.md",
+      "**/*.json",
+      "**/*.yml",
+      "**/*.yaml",
+      "**/*.txt",
+      "**/*.env"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Please analyze all recent code changes in this project by using non-interactive git commands (like 'git status --porcelain' and 'git diff --cached' or 'git diff HEAD~1') to avoid interactive prompts. Provide a comprehensive summary of what was modified, including:\n\n1. List all modified, added, and deleted files\n2. Summarize the key changes made to each file\n3. Identify the overall purpose/theme of the changes\n4. Generate an appropriate git commit message that clearly describes the changes\n\nThen commit all changes using 'git add .' followed by 'git commit -m \"your generated message\"'. Make sure to use non-interactive git commands throughout the process to avoid any prompts or interactive sessions."
+  }
+}
