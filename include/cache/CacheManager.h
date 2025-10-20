@@ -30,8 +30,60 @@ public:
         std::string status;                                    // Status code (e.g., "Good", "Bad")
         std::string reason;                                    // Status description
         uint64_t timestamp;                                    // Unix timestamp in milliseconds
-        std::chrono::steady_clock::time_point lastAccessed;   // Last access time for cleanup
-        bool hasSubscription;                                 // Whether this node has an active subscription
+        std::chrono::steady_clock::time_point creationTime;   // Cache entry creation time
+        mutable std::atomic<std::chrono::steady_clock::time_point> lastAccessed; // Last access time (atomic for lock-free updates)
+        std::atomic<bool> hasSubscription;                    // Whether this node has an active subscription (atomic)
+        
+        // Custom constructors and assignment operators for atomic members
+        CacheEntry() = default;
+        
+        CacheEntry(const CacheEntry& other) 
+            : nodeId(other.nodeId)
+            , value(other.value)
+            , status(other.status)
+            , reason(other.reason)
+            , timestamp(other.timestamp)
+            , creationTime(other.creationTime)
+            , lastAccessed(other.lastAccessed.load())
+            , hasSubscription(other.hasSubscription.load()) {}
+            
+        CacheEntry(CacheEntry&& other) noexcept
+            : nodeId(std::move(other.nodeId))
+            , value(std::move(other.value))
+            , status(std::move(other.status))
+            , reason(std::move(other.reason))
+            , timestamp(other.timestamp)
+            , creationTime(other.creationTime)
+            , lastAccessed(other.lastAccessed.load())
+            , hasSubscription(other.hasSubscription.load()) {}
+            
+        CacheEntry& operator=(const CacheEntry& other) {
+            if (this != &other) {
+                nodeId = other.nodeId;
+                value = other.value;
+                status = other.status;
+                reason = other.reason;
+                timestamp = other.timestamp;
+                creationTime = other.creationTime;
+                lastAccessed.store(other.lastAccessed.load());
+                hasSubscription.store(other.hasSubscription.load());
+            }
+            return *this;
+        }
+        
+        CacheEntry& operator=(CacheEntry&& other) noexcept {
+            if (this != &other) {
+                nodeId = std::move(other.nodeId);
+                value = std::move(other.value);
+                status = std::move(other.status);
+                reason = std::move(other.reason);
+                timestamp = other.timestamp;
+                creationTime = other.creationTime;
+                lastAccessed.store(other.lastAccessed.load());
+                hasSubscription.store(other.hasSubscription.load());
+            }
+            return *this;
+        }
         
         /**
          * @brief Convert cache entry to ReadResult
@@ -45,6 +97,67 @@ public:
                 value,
                 timestamp
             };
+        }
+        
+        /**
+         * @brief Update last accessed time atomically (lock-free)
+         */
+        void updateLastAccessed() const {
+            lastAccessed.store(std::chrono::steady_clock::now(), std::memory_order_relaxed);
+        }
+        
+        /**
+         * @brief Get last accessed time atomically
+         * @return Last accessed time point
+         */
+        std::chrono::steady_clock::time_point getLastAccessed() const {
+            return lastAccessed.load(std::memory_order_relaxed);
+        }
+        
+        /**
+         * @brief Set subscription status atomically
+         * @param subscriptionStatus New subscription status
+         */
+        void setSubscriptionStatus(bool subscriptionStatus) {
+            hasSubscription.store(subscriptionStatus, std::memory_order_relaxed);
+        }
+        
+        /**
+         * @brief Get subscription status atomically
+         * @return Current subscription status
+         */
+        bool getSubscriptionStatus() const {
+            return hasSubscription.load(std::memory_order_relaxed);
+        }
+        
+        /**
+         * @brief Check if cache entry is within refresh threshold
+         * @param threshold Refresh threshold duration
+         * @return True if entry age is within refresh threshold
+         */
+        bool isWithinRefreshThreshold(std::chrono::seconds threshold) const {
+            auto age = getAge();
+            return age < threshold;
+        }
+        
+        /**
+         * @brief Check if cache entry is expired
+         * @param expireTime Expiration duration
+         * @return True if entry is expired
+         */
+        bool isExpired(std::chrono::seconds expireTime) const {
+            auto age = getAge();
+            return age >= expireTime;
+        }
+        
+        /**
+         * @brief Get age of cache entry
+         * @return Duration since creation
+         */
+        std::chrono::seconds getAge() const {
+            auto now = std::chrono::steady_clock::now();
+            auto duration = now - creationTime;
+            return std::chrono::duration_cast<std::chrono::seconds>(duration);
         }
     };
 
@@ -66,6 +179,23 @@ public:
     };
 
     /**
+     * @brief Cache status enumeration for smart cache timing
+     */
+    enum class CacheStatus {
+        FRESH,      // < refreshThreshold, use directly
+        STALE,      // refreshThreshold < age < expireTime, return cache + background update
+        EXPIRED     // > expireTime, must refresh synchronously
+    };
+
+    /**
+     * @brief Cache result structure with status evaluation
+     */
+    struct CacheResult {
+        std::optional<CacheEntry> entry;
+        CacheStatus status;
+    };
+
+    /**
      * @brief Access control levels for cache operations
      */
     enum class AccessLevel {
@@ -75,11 +205,16 @@ public:
     };
 
     /**
-     * @brief Constructor with configurable cache expiration time
-     * @param cacheExpireMinutes Cache expiration time in minutes (default: 60)
+     * @brief Constructor with configurable cache timing parameters
+     * @param cacheExpireMinutes Cache expiration time in minutes (default: 60, legacy)
      * @param maxCacheSize Maximum number of cache entries (default: 10000)
+     * @param refreshThresholdSeconds Refresh threshold in seconds (default: 3)
+     * @param expireTimeSeconds Expiration time in seconds (default: 10)
      */
-    explicit CacheManager(int cacheExpireMinutes = 60, size_t maxCacheSize = 10000);
+    explicit CacheManager(int cacheExpireMinutes = 60, 
+                         size_t maxCacheSize = 10000,
+                         int refreshThresholdSeconds = 3,
+                         int expireTimeSeconds = 10);
 
     /**
      * @brief Destructor
@@ -98,6 +233,20 @@ public:
     std::optional<CacheEntry> getCachedValue(const std::string& nodeId);
 
     /**
+     * @brief Get cached value with status evaluation for intelligent cache decisions
+     * @param nodeId OPC UA node identifier
+     * @return CacheResult with entry (if found) and cache status
+     */
+    CacheResult getCachedValueWithStatus(const std::string& nodeId);
+
+    /**
+     * @brief Get cached values with status evaluation for batch operations
+     * @param nodeIds Vector of OPC UA node identifiers
+     * @return Vector of CacheResult with entries and cache status
+     */
+    std::vector<CacheResult> getCachedValuesWithStatus(const std::vector<std::string>& nodeIds);
+
+    /**
      * @brief Update cache with new data (typically from subscription callback)
      * @param nodeId OPC UA node identifier
      * @param value New value as string
@@ -110,6 +259,12 @@ public:
                     const std::string& status, 
                     const std::string& reason, 
                     uint64_t timestamp);
+
+    /**
+     * @brief Update cache with batch of ReadResults
+     * @param results Vector of ReadResults to update in cache
+     */
+    void updateCacheBatch(const std::vector<ReadResult>& results);
 
     /**
      * @brief Add new cache entry
@@ -205,6 +360,24 @@ public:
     double getHitRatio() const;
 
     /**
+     * @brief Get fresh cache hits count
+     * @return Number of fresh cache hits
+     */
+    uint64_t getFreshHits() const;
+
+    /**
+     * @brief Get stale cache hits count
+     * @return Number of stale cache hits
+     */
+    uint64_t getStaleHits() const;
+
+    /**
+     * @brief Get expired reads count
+     * @return Number of expired cache reads
+     */
+    uint64_t getExpiredReads() const;
+
+    /**
      * @brief Set cache access level for operations
      * @param level Access level to set
      */
@@ -228,13 +401,33 @@ public:
      */
     bool isAutoCleanupEnabled() const;
 
+    /**
+     * @brief Set refresh threshold for smart caching
+     * @param threshold Refresh threshold duration
+     */
+    void setRefreshThreshold(std::chrono::seconds threshold);
+
+    /**
+     * @brief Set expiration time for smart caching
+     * @param expireTime Expiration duration
+     */
+    void setExpireTime(std::chrono::seconds expireTime);
+
+    /**
+     * @brief Set cleanup interval (legacy method for compatibility)
+     * @param interval Cleanup interval duration
+     */
+    void setCleanupInterval(std::chrono::seconds interval);
+
 private:
     // Cache storage
     mutable std::shared_mutex cacheMutex_;                    // Reader-writer lock for thread safety
     std::unordered_map<std::string, CacheEntry> cache_;      // Main cache storage
 
     // Configuration
-    std::chrono::minutes cacheExpireTime_;                   // Cache expiration time
+    std::chrono::minutes cacheExpireTime_;                   // Cache expiration time (legacy)
+    std::chrono::seconds refreshThreshold_;                  // Refresh threshold for smart caching
+    std::chrono::seconds expireTime_;                        // Expiration time for smart caching
     size_t maxCacheSize_;                                    // Maximum cache size
 
     // Statistics (atomic for thread-safe access)
@@ -242,6 +435,11 @@ private:
     mutable std::atomic<uint64_t> totalMisses_{0};          // Total cache misses
     mutable std::atomic<uint64_t> totalReads_{0};           // Total read operations
     mutable std::atomic<uint64_t> totalWrites_{0};          // Total write operations
+    mutable std::atomic<uint64_t> freshHits_{0};            // Fresh cache hits
+    mutable std::atomic<uint64_t> staleHits_{0};            // Stale cache hits
+    mutable std::atomic<uint64_t> expiredReads_{0};         // Expired cache reads
+    mutable std::atomic<uint64_t> batchOperations_{0};      // Batch operations count
+    mutable std::atomic<uint64_t> concurrentReadBlocks_{0}; // Concurrent read blocks count
     std::chrono::steady_clock::time_point lastCleanup_;     // Last cleanup time
     std::chrono::steady_clock::time_point creationTime_;    // Cache creation time
 
@@ -263,10 +461,16 @@ private:
     size_t enforceSizeLimit();
 
     /**
-     * @brief Update last accessed time for cache entry (assumes write lock held)
-     * @param entry Cache entry to update
+     * @brief Get batch operations count
+     * @return Number of batch operations performed
      */
-    void updateLastAccessed(CacheEntry& entry) const;
+    uint64_t getBatchOperations() const;
+    
+    /**
+     * @brief Get concurrent read blocks count
+     * @return Number of times concurrent reads were blocked
+     */
+    uint64_t getConcurrentReadBlocks() const;
 
     /**
      * @brief Check access level for operation
@@ -281,6 +485,24 @@ private:
      * @return Estimated memory usage in bytes
      */
     size_t calculateEntrySize(const CacheEntry& entry) const;
+
+    /**
+     * @brief Evaluate cache status based on entry age and timing configuration
+     * @param entry Cache entry to evaluate
+     * @return CacheStatus (FRESH, STALE, or EXPIRED)
+     */
+    CacheStatus evaluateCacheStatus(const CacheEntry& entry) const;
+
+    /**
+     * @brief Record cache hit statistics (lock-free)
+     * @param status Cache status for the hit
+     */
+    void recordCacheHit(CacheStatus status) const;
+
+    /**
+     * @brief Record cache miss statistics (lock-free)
+     */
+    void recordCacheMiss() const;
 };
 
 } // namespace opcua2http

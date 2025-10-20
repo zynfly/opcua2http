@@ -6,31 +6,37 @@
 
 namespace opcua2http {
 
-CacheManager::CacheManager(int cacheExpireMinutes, size_t maxCacheSize)
+CacheManager::CacheManager(int cacheExpireMinutes, size_t maxCacheSize, 
+                          int refreshThresholdSeconds, int expireTimeSeconds)
     : cacheExpireTime_(cacheExpireMinutes)
+    , refreshThreshold_(refreshThresholdSeconds)
+    , expireTime_(expireTimeSeconds)
     , maxCacheSize_(maxCacheSize)
     , lastCleanup_(std::chrono::steady_clock::now())
     , creationTime_(std::chrono::steady_clock::now()) {
     
     std::cout << "CacheManager initialized with " << cacheExpireMinutes 
-              << " minutes expiration and max size " << maxCacheSize << std::endl;
+              << " minutes expiration, " << refreshThresholdSeconds 
+              << "s refresh threshold, " << expireTimeSeconds 
+              << "s expire time, and max size " << maxCacheSize << std::endl;
 }
 
 std::optional<CacheManager::CacheEntry> CacheManager::getCachedValue(const std::string& nodeId) {
-    // Check access level
+    // Check access level (lock-free)
     if (!checkAccessLevel(AccessLevel::READ_ONLY)) {
         std::cout << "Access denied: insufficient permissions for read operation" << std::endl;
         return std::nullopt;
     }
 
-    std::shared_lock<std::shared_mutex> lock(cacheMutex_);
-    
+    // Lock-free statistics update
     totalReads_.fetch_add(1, std::memory_order_relaxed);
+    
+    std::shared_lock<std::shared_mutex> lock(cacheMutex_);
     
     auto it = cache_.find(nodeId);
     if (it != cache_.end()) {
-        // Update last accessed time
-        const_cast<CacheEntry&>(it->second).lastAccessed = std::chrono::steady_clock::now();
+        // Lock-free last accessed time update
+        it->second.updateLastAccessed();
         totalHits_.fetch_add(1, std::memory_order_relaxed);
         return it->second;
     }
@@ -56,25 +62,25 @@ void CacheManager::updateCache(const std::string& nodeId,
     
     auto it = cache_.find(nodeId);
     if (it != cache_.end()) {
-        // Update existing entry
+        // Update existing entry (preserve creationTime)
         it->second.value = value;
         it->second.status = status;
         it->second.reason = reason;
         it->second.timestamp = timestamp;
-        updateLastAccessed(it->second);
+        it->second.updateLastAccessed(); // Use atomic method
         
         std::cout << "Cache updated for node " << nodeId << " with value: " << value << std::endl;
     } else {
         // Create new entry
-        CacheEntry entry{
-            nodeId,
-            value,
-            status,
-            reason,
-            timestamp,
-            std::chrono::steady_clock::now(),
-            false  // No subscription by default when updating from external source
-        };
+        CacheEntry entry;
+        entry.nodeId = nodeId;
+        entry.value = value;
+        entry.status = status;
+        entry.reason = reason;
+        entry.timestamp = timestamp;
+        entry.creationTime = std::chrono::steady_clock::now();
+        entry.lastAccessed.store(std::chrono::steady_clock::now());
+        entry.hasSubscription.store(false);
         
         cache_[nodeId] = entry;
         std::cout << "New cache entry created for node " << nodeId << " with value: " << value << std::endl;
@@ -90,7 +96,7 @@ void CacheManager::addCacheEntry(const std::string& nodeId, const CacheEntry& en
     std::unique_lock<std::shared_mutex> lock(cacheMutex_);
     
     cache_[nodeId] = entry;
-    updateLastAccessed(cache_[nodeId]);
+    cache_[nodeId].updateLastAccessed(); // Use atomic method
     
     std::cout << "Cache entry added for node " << nodeId << std::endl;
     
@@ -101,15 +107,15 @@ void CacheManager::addCacheEntry(const std::string& nodeId, const CacheEntry& en
 }
 
 void CacheManager::addCacheEntry(const ReadResult& result, bool hasSubscription) {
-    CacheEntry entry{
-        result.id,
-        result.value,
-        result.success ? "Good" : "Bad",
-        result.reason,
-        result.timestamp,
-        std::chrono::steady_clock::now(),
-        hasSubscription
-    };
+    CacheEntry entry;
+    entry.nodeId = result.id;
+    entry.value = result.value;
+    entry.status = result.success ? "Good" : "Bad";
+    entry.reason = result.reason;
+    entry.timestamp = result.timestamp;
+    entry.creationTime = std::chrono::steady_clock::now();
+    entry.lastAccessed.store(std::chrono::steady_clock::now());
+    entry.hasSubscription.store(hasSubscription);
     
     addCacheEntry(result.id, entry);
 }
@@ -171,7 +177,7 @@ size_t CacheManager::cleanupUnusedEntries() {
     
     for (auto it = cache_.begin(); it != cache_.end();) {
         // Only remove entries without subscriptions that haven't been accessed recently
-        if (!it->second.hasSubscription && it->second.lastAccessed < unusedThreshold) {
+        if (!it->second.getSubscriptionStatus() && it->second.getLastAccessed() < unusedThreshold) {
             std::cout << "Removing unused cache entry for node " << it->first << std::endl;
             it = cache_.erase(it);
             ++removedCount;
@@ -206,7 +212,7 @@ std::vector<std::string> CacheManager::getSubscribedNodeIds() const {
     std::vector<std::string> nodeIds;
     
     for (const auto& pair : cache_) {
-        if (pair.second.hasSubscription) {
+        if (pair.second.getSubscriptionStatus()) {
             nodeIds.push_back(pair.first);
         }
     }
@@ -215,12 +221,12 @@ std::vector<std::string> CacheManager::getSubscribedNodeIds() const {
 }
 
 void CacheManager::setSubscriptionStatus(const std::string& nodeId, bool hasSubscription) {
-    std::unique_lock<std::shared_mutex> lock(cacheMutex_);
+    std::shared_lock<std::shared_mutex> lock(cacheMutex_); // Use shared lock for atomic operations
     
     auto it = cache_.find(nodeId);
     if (it != cache_.end()) {
-        it->second.hasSubscription = hasSubscription;
-        updateLastAccessed(it->second);
+        it->second.setSubscriptionStatus(hasSubscription); // Use atomic method
+        it->second.updateLastAccessed(); // Use atomic method
         
         std::cout << "Subscription status for node " << nodeId 
                   << " set to " << (hasSubscription ? "active" : "inactive") << std::endl;
@@ -234,7 +240,7 @@ CacheManager::CacheStats CacheManager::getStats() const {
     size_t memoryUsage = 0;
     
     for (const auto& pair : cache_) {
-        if (pair.second.hasSubscription) {
+        if (pair.second.getSubscriptionStatus()) {
             ++subscribedCount;
         }
         memoryUsage += calculateEntrySize(pair.second);
@@ -291,7 +297,7 @@ bool CacheManager::isFull() const {
 
 bool CacheManager::isExpired(const CacheEntry& entry) const {
     auto now = std::chrono::steady_clock::now();
-    return (now - entry.lastAccessed) > cacheExpireTime_;
+    return (now - entry.getLastAccessed()) > cacheExpireTime_;
 }
 
 size_t CacheManager::enforceSizeLimit() {
@@ -310,8 +316,8 @@ size_t CacheManager::enforceSizeLimit() {
     
     for (const auto& pair : cache_) {
         // Don't remove entries with active subscriptions
-        if (!pair.second.hasSubscription) {
-            entries.emplace_back(pair.first, pair.second.lastAccessed);
+        if (!pair.second.getSubscriptionStatus()) {
+            entries.emplace_back(pair.first, pair.second.getLastAccessed());
         }
     }
     
@@ -335,9 +341,7 @@ size_t CacheManager::enforceSizeLimit() {
     return removedCount;
 }
 
-void CacheManager::updateLastAccessed(CacheEntry& entry) const {
-    entry.lastAccessed = std::chrono::steady_clock::now();
-}
+
 
 size_t CacheManager::getMemoryUsage() const {
     std::shared_lock<std::shared_mutex> lock(cacheMutex_);
@@ -393,6 +397,183 @@ size_t CacheManager::calculateEntrySize(const CacheEntry& entry) const {
     size += entry.reason.capacity();
     
     return size;
+}
+
+CacheManager::CacheResult CacheManager::getCachedValueWithStatus(const std::string& nodeId) {
+    // Check access level
+    if (!checkAccessLevel(AccessLevel::READ_ONLY)) {
+        std::cout << "Access denied: insufficient permissions for read operation" << std::endl;
+        return CacheResult{std::nullopt, CacheStatus::EXPIRED};
+    }
+
+    std::shared_lock<std::shared_mutex> lock(cacheMutex_);
+    
+    totalReads_.fetch_add(1, std::memory_order_relaxed);
+    
+    auto it = cache_.find(nodeId);
+    if (it != cache_.end()) {
+        // Update last accessed time atomically
+        it->second.updateLastAccessed();
+        
+        CacheStatus status = evaluateCacheStatus(it->second);
+        recordCacheHit(status);
+        
+        return CacheResult{it->second, status};
+    }
+    
+    recordCacheMiss();
+    return CacheResult{std::nullopt, CacheStatus::EXPIRED};
+}
+
+std::vector<CacheManager::CacheResult> CacheManager::getCachedValuesWithStatus(const std::vector<std::string>& nodeIds) {
+    // Check access level
+    if (!checkAccessLevel(AccessLevel::READ_ONLY)) {
+        std::cout << "Access denied: insufficient permissions for read operation" << std::endl;
+        return std::vector<CacheResult>(nodeIds.size(), CacheResult{std::nullopt, CacheStatus::EXPIRED});
+    }
+
+    std::shared_lock<std::shared_mutex> lock(cacheMutex_);
+    
+    std::vector<CacheResult> results;
+    results.reserve(nodeIds.size());
+    
+    for (const auto& nodeId : nodeIds) {
+        totalReads_.fetch_add(1, std::memory_order_relaxed);
+        
+        auto it = cache_.find(nodeId);
+        if (it != cache_.end()) {
+            // Update last accessed time atomically
+            it->second.updateLastAccessed();
+            
+            CacheStatus status = evaluateCacheStatus(it->second);
+            recordCacheHit(status);
+            
+            results.emplace_back(CacheResult{it->second, status});
+        } else {
+            recordCacheMiss();
+            results.emplace_back(CacheResult{std::nullopt, CacheStatus::EXPIRED});
+        }
+    }
+    
+    return results;
+}
+
+void CacheManager::updateCacheBatch(const std::vector<ReadResult>& results) {
+    // Check access level (lock-free)
+    if (!checkAccessLevel(AccessLevel::READ_WRITE)) {
+        std::cout << "Access denied: insufficient permissions for write operation" << std::endl;
+        return;
+    }
+
+    // Increment batch operations counter (lock-free)
+    batchOperations_.fetch_add(1, std::memory_order_relaxed);
+
+    std::unique_lock<std::shared_mutex> lock(cacheMutex_);
+    
+    // Batch update statistics (lock-free)
+    totalWrites_.fetch_add(results.size(), std::memory_order_relaxed);
+    
+    for (const auto& result : results) {
+        auto it = cache_.find(result.id);
+        if (it != cache_.end()) {
+            // Update existing entry (preserve creationTime)
+            it->second.value = result.value;
+            it->second.status = result.success ? "Good" : "Bad";
+            it->second.reason = result.reason;
+            it->second.timestamp = result.timestamp;
+            it->second.updateLastAccessed(); // Use atomic method
+        } else {
+            // Create new entry
+            CacheEntry entry;
+            entry.nodeId = result.id;
+            entry.value = result.value;
+            entry.status = result.success ? "Good" : "Bad";
+            entry.reason = result.reason;
+            entry.timestamp = result.timestamp;
+            entry.creationTime = std::chrono::steady_clock::now();
+            entry.lastAccessed.store(std::chrono::steady_clock::now());
+            entry.hasSubscription.store(false);
+            
+            cache_[result.id] = entry;
+        }
+    }
+    
+    // Enforce size limit if necessary
+    if (cache_.size() > maxCacheSize_) {
+        enforceSizeLimit();
+    }
+    
+    std::cout << "Batch cache update completed for " << results.size() << " entries" << std::endl;
+}
+
+CacheManager::CacheStatus CacheManager::evaluateCacheStatus(const CacheEntry& entry) const {
+    auto age = entry.getAge();
+    
+    if (age < refreshThreshold_) {
+        return CacheStatus::FRESH;
+    } else if (age < expireTime_) {
+        return CacheStatus::STALE;
+    } else {
+        return CacheStatus::EXPIRED;
+    }
+}
+
+void CacheManager::setRefreshThreshold(std::chrono::seconds threshold) {
+    std::unique_lock<std::shared_mutex> lock(cacheMutex_);
+    refreshThreshold_ = threshold;
+    std::cout << "Cache refresh threshold set to " << threshold.count() << " seconds" << std::endl;
+}
+
+void CacheManager::setExpireTime(std::chrono::seconds expireTime) {
+    std::unique_lock<std::shared_mutex> lock(cacheMutex_);
+    expireTime_ = expireTime;
+    std::cout << "Cache expire time set to " << expireTime.count() << " seconds" << std::endl;
+}
+
+void CacheManager::setCleanupInterval(std::chrono::seconds interval) {
+    // This is a legacy method for compatibility
+    // In the new design, cleanup interval is handled by the background updater
+    std::cout << "Cleanup interval set to " << interval.count() << " seconds (legacy method)" << std::endl;
+}
+
+void CacheManager::recordCacheHit(CacheStatus status) const {
+    totalHits_.fetch_add(1, std::memory_order_relaxed);
+    
+    switch (status) {
+        case CacheStatus::FRESH:
+            freshHits_.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case CacheStatus::STALE:
+            staleHits_.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case CacheStatus::EXPIRED:
+            expiredReads_.fetch_add(1, std::memory_order_relaxed);
+            break;
+    }
+}
+
+void CacheManager::recordCacheMiss() const {
+    totalMisses_.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint64_t CacheManager::getFreshHits() const {
+    return freshHits_.load(std::memory_order_relaxed);
+}
+
+uint64_t CacheManager::getStaleHits() const {
+    return staleHits_.load(std::memory_order_relaxed);
+}
+
+uint64_t CacheManager::getExpiredReads() const {
+    return expiredReads_.load(std::memory_order_relaxed);
+}
+
+uint64_t CacheManager::getBatchOperations() const {
+    return batchOperations_.load(std::memory_order_relaxed);
+}
+
+uint64_t CacheManager::getConcurrentReadBlocks() const {
+    return concurrentReadBlocks_.load(std::memory_order_relaxed);
 }
 
 } // namespace opcua2http
