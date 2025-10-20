@@ -33,6 +33,7 @@ set(SOURCES
     src/core/OPCUALogBridge.cpp
     src/core/ReadStrategy.cpp
     src/core/BackgroundUpdater.cpp
+    src/core/CacheErrorHandler.cpp
     src/opcua/OPCUAClient.cpp
     src/cache/CacheManager.cpp
     src/cache/CacheMetrics.cpp
@@ -108,6 +109,7 @@ if(BUILD_TESTS)
         src/core/OPCUAHTTPBridge.cpp
         src/core/ReadStrategy.cpp
         src/core/BackgroundUpdater.cpp
+        src/core/CacheErrorHandler.cpp
         src/opcua/OPCUAClient.cpp
         src/cache/CacheManager.cpp
         src/cache/CacheMetrics.cpp

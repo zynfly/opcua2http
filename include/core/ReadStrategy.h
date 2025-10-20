@@ -12,12 +12,13 @@
 #include "opcua/OPCUAClient.h"
 #include "core/ReadResult.h"
 #include "core/IBackgroundUpdater.h"
+#include "core/CacheErrorHandler.h"
 
 namespace opcua2http {
 
 /**
  * @brief ReadStrategy component for intelligent cache-based OPC UA data reading
- * 
+ *
  * This class implements the core logic for deciding when to use cached data
  * versus reading from the OPC UA server based on cache age and timing thresholds.
  * It supports batch processing optimization and concurrency control.
@@ -31,7 +32,7 @@ public:
         std::vector<std::string> freshNodes;      // Return from cache (< refreshThreshold)
         std::vector<std::string> staleNodes;      // Return cache + background update (refreshThreshold < age < expireTime)
         std::vector<std::string> expiredNodes;    // Must read synchronously (> expireTime)
-        
+
         /**
          * @brief Get total number of nodes in the plan
          * @return Total node count
@@ -39,7 +40,7 @@ public:
         size_t getTotalNodes() const {
             return freshNodes.size() + staleNodes.size() + expiredNodes.size();
         }
-        
+
         /**
          * @brief Check if plan is empty
          * @return True if no nodes in plan
@@ -53,8 +54,10 @@ public:
      * @brief Constructor
      * @param cacheManager Pointer to cache manager instance
      * @param opcClient Pointer to OPC UA client instance
+     * @param errorHandler Pointer to cache error handler instance (optional)
      */
-    ReadStrategy(CacheManager* cacheManager, OPCUAClient* opcClient);
+    ReadStrategy(CacheManager* cacheManager, OPCUAClient* opcClient,
+                CacheErrorHandler* errorHandler = nullptr);
 
     /**
      * @brief Destructor
@@ -135,11 +138,18 @@ public:
      */
     void setBackgroundUpdater(IBackgroundUpdater* backgroundUpdater);
 
+    /**
+     * @brief Set error handler instance (for dependency injection)
+     * @param errorHandler Pointer to error handler instance
+     */
+    void setErrorHandler(CacheErrorHandler* errorHandler);
+
 private:
     // Dependencies
     CacheManager* cacheManager_;                              // Cache manager instance
     OPCUAClient* opcClient_;                                  // OPC UA client instance
     IBackgroundUpdater* backgroundUpdater_;                   // Background updater instance (optional)
+    CacheErrorHandler* errorHandler_;                         // Error handler instance (optional)
 
     // Concurrency control
     mutable std::mutex readMutex_;                           // Mutex for protecting activeReads_

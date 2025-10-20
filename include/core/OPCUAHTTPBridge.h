@@ -17,6 +17,7 @@ class CacheMetrics;
 class APIHandler;
 class ReadStrategy;
 class BackgroundUpdater;
+class CacheErrorHandler;
 
 /**
  * @brief Main application class for the OPC UA HTTP Bridge
@@ -84,6 +85,7 @@ private:
     std::unique_ptr<OPCUAClient> opcClient_;
     std::unique_ptr<CacheManager> cacheManager_;
     std::unique_ptr<CacheMetrics> cacheMetrics_;
+    std::unique_ptr<CacheErrorHandler> errorHandler_;
     std::unique_ptr<ReadStrategy> readStrategy_;
     std::unique_ptr<BackgroundUpdater> backgroundUpdater_;
     std::unique_ptr<APIHandler> apiHandler_;

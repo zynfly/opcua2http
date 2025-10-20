@@ -14,11 +14,13 @@ APIHandler::APIHandler(CacheManager* cacheManager,
                       ReadStrategy* readStrategy,
                       OPCUAClient* opcClient,
                       const Configuration& config,
-                      CacheMetrics* cacheMetrics)
+                      CacheMetrics* cacheMetrics,
+                      CacheErrorHandler* errorHandler)
     : cacheManager_(cacheManager)
     , readStrategy_(readStrategy)
     , opcClient_(opcClient)
     , cacheMetrics_(cacheMetrics)
+    , errorHandler_(errorHandler)
     , config_(config)
     , startTime_(std::chrono::steady_clock::now())
 {
@@ -275,6 +277,33 @@ crow::response APIHandler::handleStatusRequest() {
         // Add enhanced cache metrics if available
         if (cacheMetrics_) {
             status["cache_metrics"] = cacheMetrics_->getMetricsJSON(true);
+        }
+
+        // Add error handler statistics if available
+        if (errorHandler_) {
+            auto errorStats = errorHandler_->getStats();
+            status["error_handling"] = {
+                {"total_errors", errorStats.totalErrors},
+                {"connection_errors", errorStats.connectionErrors},
+                {"cache_hit_on_error", errorStats.cacheHitOnError},
+                {"cache_miss_on_error", errorStats.cacheMissOnError},
+                {"retry_attempts", errorStats.retryAttempts},
+                {"successful_retries", errorStats.successfulRetries},
+                {"failed_retries", errorStats.failedRetries},
+                {"error_rate_per_minute", errorStats.errorRate},
+                {"error_rate_threshold", errorHandler_->getErrorRateThreshold()},
+                {"error_rate_exceeded", errorHandler_->isErrorRateExceeded()},
+                {"auto_retry_enabled", errorHandler_->isAutoRetryEnabled()},
+                {"max_retry_attempts", errorHandler_->getMaxRetryAttempts()}
+            };
+
+            // Add warning if error rate is high
+            if (errorHandler_->isErrorRateExceeded()) {
+                if (!status.contains("warnings")) {
+                    status["warnings"] = nlohmann::json::array();
+                }
+                status["warnings"].push_back("Error rate exceeds threshold");
+            }
         }
 
         return buildJSONResponse(status);

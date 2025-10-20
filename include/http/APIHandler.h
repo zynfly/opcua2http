@@ -13,6 +13,7 @@
 #include "cache/CacheManager.h"
 #include "cache/CacheMetrics.h"
 #include "core/ReadStrategy.h"
+#include "core/CacheErrorHandler.h"
 #include "opcua/OPCUAClient.h"
 #include "core/ReadResult.h"
 
@@ -67,12 +68,14 @@ public:
      * @param opcClient Pointer to OPC UA client (must remain valid during lifetime)
      * @param config Configuration settings
      * @param cacheMetrics Pointer to cache metrics (optional, for enhanced monitoring)
+     * @param errorHandler Pointer to error handler (optional, for error statistics)
      */
     APIHandler(CacheManager* cacheManager,
                ReadStrategy* readStrategy,
                OPCUAClient* opcClient,
                const Configuration& config,
-               CacheMetrics* cacheMetrics = nullptr);
+               CacheMetrics* cacheMetrics = nullptr,
+               CacheErrorHandler* errorHandler = nullptr);
 
     /**
      * @brief Destructor
@@ -241,6 +244,7 @@ private:
     ReadStrategy* readStrategy_;                   // Read strategy reference
     OPCUAClient* opcClient_;                       // OPC UA client reference
     CacheMetrics* cacheMetrics_;                   // Cache metrics reference (optional)
+    CacheErrorHandler* errorHandler_;              // Error handler reference (optional)
     Configuration config_;                         // Configuration settings
 
     // Statistics (atomic for thread-safe access)

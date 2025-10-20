@@ -6,6 +6,7 @@
 #include "cache/CacheMetrics.h"
 #include "core/ReadStrategy.h"
 #include "core/BackgroundUpdater.h"
+#include "core/CacheErrorHandler.h"
 #include "http/APIHandler.h"
 #include <iostream>
 #include <csignal>
@@ -318,10 +319,18 @@ bool OPCUAHTTPBridge::initializeComponents() {
         );
         spdlog::debug("Cache metrics initialized");
 
+        // Initialize CacheErrorHandler
+        errorHandler_ = std::make_unique<CacheErrorHandler>(
+            cacheManager_.get(),
+            opcClient_.get()
+        );
+        spdlog::debug("Cache error handler initialized");
+
         // Initialize ReadStrategy
         readStrategy_ = std::make_unique<ReadStrategy>(
             cacheManager_.get(),
-            opcClient_.get()
+            opcClient_.get(),
+            errorHandler_.get()
         );
 
         // Set background updater for ReadStrategy
@@ -339,7 +348,8 @@ bool OPCUAHTTPBridge::initializeComponents() {
             readStrategy_.get(),
             opcClient_.get(),
             *config_,
-            cacheMetrics_.get()
+            cacheMetrics_.get(),
+            errorHandler_.get()
         );
         spdlog::debug("API handler initialized");
 
@@ -394,6 +404,9 @@ void OPCUAHTTPBridge::cleanup() {
 
         readStrategy_.reset();
         spdlog::debug("Read strategy cleaned up");
+
+        errorHandler_.reset();
+        spdlog::debug("Error handler cleaned up");
 
         cacheMetrics_.reset();
         spdlog::debug("Cache metrics cleaned up");
