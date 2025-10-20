@@ -31,6 +31,7 @@ set(SOURCES
     src/core/OPCUAHTTPBridge.cpp
     src/core/ErrorHandler.cpp
     src/core/OPCUALogBridge.cpp
+    src/core/ReadStrategy.cpp
     src/opcua/OPCUAClient.cpp
     src/cache/CacheManager.cpp
     src/subscription/SubscriptionManager.cpp
@@ -94,6 +95,7 @@ if(BUILD_TESTS)
         tests/unit/test_reconnection_manager.cpp
         tests/unit/test_api_handler.cpp
         tests/unit/test_error_handler.cpp
+        tests/unit/test_read_strategy.cpp
         # Integration tests
         tests/integration/test_end_to_end.cpp
         # Source files needed for tests
@@ -101,6 +103,7 @@ if(BUILD_TESTS)
         src/core/ErrorHandler.cpp
         src/core/OPCUALogBridge.cpp
         src/core/OPCUAHTTPBridge.cpp
+        src/core/ReadStrategy.cpp
         src/opcua/OPCUAClient.cpp
         src/cache/CacheManager.cpp
         src/subscription/SubscriptionManager.cpp
