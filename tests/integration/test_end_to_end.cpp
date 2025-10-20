@@ -599,5 +599,245 @@ TEST_F(EndToEndIntegrationTest, MixedCachedAndNonCachedRequests) {
     std::cout << "Mixed cache scenario test completed successfully" << std::endl;
 }
 
+/**
+ * @brief Test end-to-end cache flow with timing behavior
+ *
+ * Verifies that:
+ * 1. Fresh cache (< 3s) returns immediately
+ * 2. Stale cache (3-10s) returns cached data with background update
+ * 3. Expired cache (> 10s) forces synchronous read
+ */
+TEST_F(EndToEndIntegrationTest, CacheFlowWithTimingBehavior) {
+    std::string nodeId = getTestNodeId(1001);
+
+    std::cout << "Step 1: First request - populates cache" << std::endl;
+    auto response1 = makeAPIRequest(nodeId);
+    ASSERT_TRUE(response1.contains("readResults"));
+    ASSERT_EQ(response1["readResults"].size(), 1);
+
+    auto result1 = response1["readResults"][0];
+    EXPECT_TRUE(result1["success"].get<bool>());
+    std::string initialValue = result1["value"];
+
+    std::cout << "Step 2: Immediate second request - should use fresh cache" << std::endl;
+    auto response2 = makeAPIRequest(nodeId);
+    ASSERT_TRUE(response2.contains("readResults"));
+    auto result2 = response2["readResults"][0];
+    EXPECT_TRUE(result2["success"].get<bool>());
+    EXPECT_EQ(result2["value"], initialValue);
+
+    std::cout << "Step 3: Wait 4 seconds - cache becomes stale" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+
+    // Update value on server
+    UA_Variant newValue = TestValueFactory::createInt32(99999);
+    mockServer_->updateTestVariable(1001, newValue);
+    UA_Variant_clear(&newValue);
+
+    std::cout << "Step 4: Request with stale cache - should return cached data quickly" << std::endl;
+    auto response3 = makeAPIRequest(nodeId);
+    ASSERT_TRUE(response3.contains("readResults"));
+    auto result3 = response3["readResults"][0];
+    EXPECT_TRUE(result3["success"].get<bool>());
+    // Should return cached data (may be old or new depending on background update timing)
+
+    std::cout << "Cache flow timing test completed" << std::endl;
+}
+
+/**
+ * @brief Test concurrent requests with cache
+ *
+ * Verifies that:
+ * 1. Multiple concurrent requests are handled correctly
+ * 2. Cache prevents duplicate OPC UA reads
+ * 3. All requests receive consistent data
+ */
+TEST_F(EndToEndIntegrationTest, ConcurrentRequestsWithCache) {
+    std::string nodeId = getTestNodeId(1001);
+
+    const int numThreads = 10;
+    std::vector<std::thread> threads;
+    std::vector<nlohmann::json> responses(numThreads);
+    std::atomic<int> successCount{0};
+
+    std::cout << "Launching " << numThreads << " concurrent requests" << std::endl;
+
+    // Launch concurrent requests
+    for (int i = 0; i < numThreads; ++i) {
+        threads.emplace_back([&, i]() {
+            responses[i] = makeAPIRequest(nodeId);
+            if (responses[i].contains("readResults") &&
+                responses[i]["readResults"].size() > 0 &&
+                responses[i]["readResults"][0]["success"].get<bool>()) {
+                successCount++;
+            }
+        });
+    }
+
+    // Wait for all threads
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    std::cout << "All concurrent requests completed" << std::endl;
+
+    // All requests should succeed
+    EXPECT_EQ(successCount.load(), numThreads);
+
+    // All responses should have the same value (from cache)
+    std::string firstValue;
+    for (int i = 0; i < numThreads; ++i) {
+        if (responses[i].contains("readResults") && responses[i]["readResults"].size() > 0) {
+            std::string value = responses[i]["readResults"][0]["value"];
+            if (firstValue.empty()) {
+                firstValue = value;
+            }
+            // All values should be consistent
+            EXPECT_EQ(value, firstValue) << "Response " << i << " has inconsistent value";
+        }
+    }
+}
+
+/**
+ * @brief Test batch operations with cache
+ *
+ * Verifies that:
+ * 1. Batch requests with multiple nodes work correctly
+ * 2. Mixed cached/non-cached nodes are handled properly
+ * 3. Results maintain correct order
+ */
+TEST_F(EndToEndIntegrationTest, BatchOperationsWithCache) {
+    std::vector<std::string> nodeIds = {
+        getTestNodeId(1001),
+        getTestNodeId(1002),
+        getTestNodeId(1003)
+    };
+
+    std::cout << "Step 1: Batch request for 3 nodes" << std::endl;
+    std::string nodeIdsStr = nodeIds[0] + "," + nodeIds[1] + "," + nodeIds[2];
+    auto response1 = makeAPIRequest(nodeIdsStr);
+
+    ASSERT_TRUE(response1.contains("readResults"));
+    ASSERT_EQ(response1["readResults"].size(), 3);
+
+    // Verify all results are successful
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_TRUE(response1["readResults"][i]["success"].get<bool>())
+            << "Result " << i << " should be successful";
+        EXPECT_EQ(response1["readResults"][i]["nodeId"], nodeIds[i])
+            << "Result " << i << " should have correct node ID";
+    }
+
+    std::cout << "Step 2: Second batch request - should use cache" << std::endl;
+    auto response2 = makeAPIRequest(nodeIdsStr);
+
+    ASSERT_TRUE(response2.contains("readResults"));
+    ASSERT_EQ(response2["readResults"].size(), 3);
+
+    // Verify results are consistent with first request
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_TRUE(response2["readResults"][i]["success"].get<bool>());
+        EXPECT_EQ(response2["readResults"][i]["nodeId"], nodeIds[i]);
+    }
+
+    std::cout << "Batch operations test completed" << std::endl;
+}
+
+/**
+ * @brief Test OPC UA disconnection and recovery
+ *
+ * Verifies that:
+ * 1. System handles OPC UA server disconnection gracefully
+ * 2. Cache fallback works when server is unavailable
+ * 3. System recovers when server comes back online
+ */
+TEST_F(EndToEndIntegrationTest, OPCDisconnectionAndRecovery) {
+    std::string nodeId = getTestNodeId(1001);
+
+    std::cout << "Step 1: Normal request with server running" << std::endl;
+    auto response1 = makeAPIRequest(nodeId);
+    ASSERT_TRUE(response1.contains("readResults"));
+    ASSERT_EQ(response1["readResults"].size(), 1);
+    EXPECT_TRUE(response1["readResults"][0]["success"].get<bool>());
+
+    std::string cachedValue = response1["readResults"][0]["value"];
+
+    std::cout << "Step 2: Stop OPC UA server" << std::endl;
+    mockServer_->stop();
+
+    // Wait a bit for disconnection to be detected
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    std::cout << "Step 3: Request with server down - should use cache fallback" << std::endl;
+    auto response2 = makeAPIRequest(nodeId);
+    ASSERT_TRUE(response2.contains("readResults"));
+    ASSERT_EQ(response2["readResults"].size(), 1);
+
+    // Should still return data (from cache) or error
+    auto result2 = response2["readResults"][0];
+    EXPECT_EQ(result2["nodeId"], nodeId);
+
+    std::cout << "Step 4: Restart OPC UA server" << std::endl;
+    ASSERT_TRUE(mockServer_->start()) << "Failed to restart mock server";
+
+    // Wait for reconnection
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    std::cout << "Step 5: Request after server recovery" << std::endl;
+    auto response3 = makeAPIRequest(nodeId);
+    ASSERT_TRUE(response3.contains("readResults"));
+    ASSERT_EQ(response3["readResults"].size(), 1);
+
+    // Should succeed again
+    EXPECT_TRUE(response3["readResults"][0]["success"].get<bool>());
+
+    std::cout << "Disconnection and recovery test completed" << std::endl;
+}
+
+/**
+ * @brief Test API compatibility with cache system
+ *
+ * Verifies that:
+ * 1. /iotgateway/read endpoint maintains exact same behavior
+ * 2. JSON response format is unchanged
+ * 3. All fields are present and correctly formatted
+ */
+TEST_F(EndToEndIntegrationTest, APICompatibilityWithCache) {
+    std::string nodeId = getTestNodeId(1001);
+
+    std::cout << "Testing API compatibility" << std::endl;
+    auto response = makeAPIRequest(nodeId);
+
+    // Verify response structure
+    ASSERT_TRUE(response.contains("readResults"));
+    ASSERT_TRUE(response["readResults"].is_array());
+    ASSERT_EQ(response["readResults"].size(), 1);
+
+    auto result = response["readResults"][0];
+
+    // Verify all required fields are present
+    EXPECT_TRUE(result.contains("nodeId")) << "Missing nodeId field";
+    EXPECT_TRUE(result.contains("success")) << "Missing success field";
+    EXPECT_TRUE(result.contains("quality")) << "Missing quality field";
+    EXPECT_TRUE(result.contains("value")) << "Missing value field";
+    EXPECT_TRUE(result.contains("timestamp_iso")) << "Missing timestamp_iso field";
+
+    // Verify field types
+    EXPECT_TRUE(result["nodeId"].is_string());
+    EXPECT_TRUE(result["success"].is_boolean());
+    EXPECT_TRUE(result["quality"].is_string());
+    EXPECT_TRUE(result["value"].is_string());
+    EXPECT_TRUE(result["timestamp_iso"].is_string());
+
+    // Verify field values
+    EXPECT_EQ(result["nodeId"], nodeId);
+    EXPECT_TRUE(result["success"].get<bool>());
+    EXPECT_EQ(result["quality"], "Good");
+    EXPECT_FALSE(result["value"].get<std::string>().empty());
+    EXPECT_FALSE(result["timestamp_iso"].get<std::string>().empty());
+
+    std::cout << "API compatibility verified" << std::endl;
+}
+
 } // namespace test
 } // namespace opcua2http

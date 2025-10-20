@@ -20,18 +20,18 @@ protected:
     void SetUp() override {
         // Save original logger
         originalLogger_ = spdlog::default_logger();
-        
+
         // Create clean test logger
         auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         auto logger = std::make_shared<spdlog::logger>("test_default", sink);
         spdlog::set_default_logger(logger);
-        
+
         // Initialize cache manager with test configuration
         cacheManager_ = std::make_unique<CacheManager>(60, 1000, 3, 10);
-        
+
         // Initialize OPC client (we'll use a mock or real client for testing)
         opcClient_ = std::make_unique<OPCUAClient>();
-        
+
         // Initialize ReadStrategy
         readStrategy_ = std::make_unique<ReadStrategy>(cacheManager_.get(), opcClient_.get());
     }
@@ -40,7 +40,7 @@ protected:
         readStrategy_.reset();
         opcClient_.reset();
         cacheManager_.reset();
-        
+
         // Restore original logger
         if (originalLogger_) {
             spdlog::set_default_logger(originalLogger_);
@@ -59,11 +59,11 @@ protected:
 TEST_F(ReadStrategyTest, ConcurrencyControlEnabled) {
     // Test that concurrency control is enabled by default
     EXPECT_TRUE(readStrategy_->isConcurrencyControlEnabled());
-    
+
     // Test enabling/disabling concurrency control
     readStrategy_->enableConcurrencyControl(false);
     EXPECT_FALSE(readStrategy_->isConcurrencyControlEnabled());
-    
+
     readStrategy_->enableConcurrencyControl(true);
     EXPECT_TRUE(readStrategy_->isConcurrencyControlEnabled());
 }
@@ -71,11 +71,11 @@ TEST_F(ReadStrategyTest, ConcurrencyControlEnabled) {
 TEST_F(ReadStrategyTest, MaxConcurrentReadsConfiguration) {
     // Test default max concurrent reads
     EXPECT_EQ(readStrategy_->getMaxConcurrentReads(), 10);
-    
+
     // Test setting max concurrent reads
     readStrategy_->setMaxConcurrentReads(5);
     EXPECT_EQ(readStrategy_->getMaxConcurrentReads(), 5);
-    
+
     readStrategy_->setMaxConcurrentReads(20);
     EXPECT_EQ(readStrategy_->getMaxConcurrentReads(), 20);
 }
@@ -86,7 +86,7 @@ TEST_F(ReadStrategyTest, BatchPlanCreation) {
     auto plan = readStrategy_->createBatchPlan(emptyNodes);
     EXPECT_TRUE(plan.isEmpty());
     EXPECT_EQ(plan.getTotalNodes(), 0);
-    
+
     // Test batch plan with nodes (will be categorized based on cache status)
     std::vector<std::string> testNodes = {"ns=2;s=Temperature", "ns=2;s=Pressure", "ns=2;s=Flow"};
     auto planWithNodes = readStrategy_->createBatchPlan(testNodes);
@@ -113,13 +113,13 @@ TEST_F(ReadStrategyTest, ConcurrentReadDeduplication) {
     std::atomic<int> readCount{0};
     std::atomic<int> completedReads{0};
     const int numThreads = 5;
-    
+
     // Enable concurrency control
     readStrategy_->enableConcurrencyControl(true);
-    
+
     std::vector<std::thread> threads;
     std::vector<ReadResult> results(numThreads);
-    
+
     // Launch multiple threads trying to read the same node
     for (int i = 0; i < numThreads; ++i) {
         threads.emplace_back([&, i]() {
@@ -128,16 +128,16 @@ TEST_F(ReadStrategyTest, ConcurrentReadDeduplication) {
             completedReads++;
         });
     }
-    
+
     // Wait for all threads to complete
     for (auto& thread : threads) {
         thread.join();
     }
-    
+
     // Verify all threads completed
     EXPECT_EQ(readCount.load(), numThreads);
     EXPECT_EQ(completedReads.load(), numThreads);
-    
+
     // All results should have the same node ID
     for (const auto& result : results) {
         EXPECT_EQ(result.id, testNodeId);
@@ -147,7 +147,7 @@ TEST_F(ReadStrategyTest, ConcurrentReadDeduplication) {
 TEST_F(ReadStrategyTest, BackgroundUpdaterIntegration) {
     // Test that ReadStrategy can work without background updater
     EXPECT_NO_THROW(readStrategy_->scheduleBackgroundUpdate("ns=2;s=TestNode"));
-    
+
     std::vector<std::string> testNodes = {"ns=2;s=Node1", "ns=2;s=Node2"};
     EXPECT_NO_THROW(readStrategy_->scheduleBackgroundUpdates(testNodes));
 }
@@ -161,22 +161,22 @@ public:
 TEST_F(ReadStrategyTest, BackgroundUpdaterCalls) {
     auto mockUpdater = std::make_unique<MockBackgroundUpdater>();
     auto* mockPtr = mockUpdater.get();
-    
+
     // Set expectations
     EXPECT_CALL(*mockPtr, scheduleUpdate("ns=2;s=TestNode"))
         .Times(1);
-    
+
     std::vector<std::string> testNodes = {"ns=2;s=Node1", "ns=2;s=Node2"};
     EXPECT_CALL(*mockPtr, scheduleBatchUpdate(testNodes))
         .Times(1);
-    
+
     // Set the mock background updater
     readStrategy_->setBackgroundUpdater(mockPtr);
-    
+
     // Test calls
     readStrategy_->scheduleBackgroundUpdate("ns=2;s=TestNode");
     readStrategy_->scheduleBackgroundUpdates(testNodes);
-    
+
     // Clean up
     readStrategy_->setBackgroundUpdater(nullptr);
 }
@@ -186,7 +186,7 @@ TEST_F(ReadStrategyTest, BatchPlanExecutionWithMixedCacheStates) {
     const std::string freshNode = "ns=2;s=FreshNode";
     const std::string staleNode = "ns=2;s=StaleNode";
     const std::string expiredNode = "ns=2;s=ExpiredNode";
-    
+
     // Add fresh cache entry (< 3 seconds)
     auto freshEntry = CacheManager::CacheEntry{};
     freshEntry.nodeId = freshNode;
@@ -196,7 +196,7 @@ TEST_F(ReadStrategyTest, BatchPlanExecutionWithMixedCacheStates) {
     freshEntry.timestamp = 1234567890;
     freshEntry.creationTime = std::chrono::steady_clock::now();
     cacheManager_->addCacheEntry(freshNode, freshEntry);
-    
+
     // Add stale cache entry (> 3 seconds but < 10 seconds)
     auto staleEntry = CacheManager::CacheEntry{};
     staleEntry.nodeId = staleNode;
@@ -206,21 +206,21 @@ TEST_F(ReadStrategyTest, BatchPlanExecutionWithMixedCacheStates) {
     staleEntry.timestamp = 1234567890;
     staleEntry.creationTime = std::chrono::steady_clock::now() - std::chrono::seconds(5);
     cacheManager_->addCacheEntry(staleNode, staleEntry);
-    
+
     // Expired node will not be in cache, so it will be categorized as expired
-    
+
     std::vector<std::string> testNodes = {freshNode, staleNode, expiredNode};
     auto plan = readStrategy_->createBatchPlan(testNodes);
-    
+
     // Verify categorization
     EXPECT_EQ(plan.freshNodes.size(), 1);
     EXPECT_EQ(plan.staleNodes.size(), 1);
     EXPECT_EQ(plan.expiredNodes.size(), 1);
-    
+
     EXPECT_EQ(plan.freshNodes[0], freshNode);
     EXPECT_EQ(plan.staleNodes[0], staleNode);
     EXPECT_EQ(plan.expiredNodes[0], expiredNode);
-    
+
     // Execute the batch plan
     auto results = readStrategy_->executeBatchPlan(plan);
     EXPECT_EQ(results.size(), 3);
@@ -232,10 +232,10 @@ TEST_F(ReadStrategyTest, BatchPlanOptimization) {
     for (int i = 0; i < 100; ++i) {
         largeNodeList.push_back("ns=2;s=Node" + std::to_string(i));
     }
-    
+
     auto plan = readStrategy_->createBatchPlan(largeNodeList);
     EXPECT_EQ(plan.getTotalNodes(), largeNodeList.size());
-    
+
     // All nodes should be categorized as expired since they're not in cache
     EXPECT_EQ(plan.expiredNodes.size(), largeNodeList.size());
     EXPECT_EQ(plan.freshNodes.size(), 0);
@@ -246,22 +246,266 @@ TEST_F(ReadStrategyTest, IntelligentBatchGrouping) {
     // Test that nodes are intelligently grouped for OPC UA batch reads
     std::vector<std::string> expiredNodes = {
         "ns=2;s=Temperature1",
-        "ns=2;s=Temperature2", 
+        "ns=2;s=Temperature2",
         "ns=2;s=Pressure1",
         "ns=2;s=Pressure2"
     };
-    
+
     ReadStrategy::BatchReadPlan plan;
     plan.expiredNodes = expiredNodes;
-    
+
     // Execute batch plan - this should use batch reading for expired nodes
     auto results = readStrategy_->executeBatchPlan(plan);
-    
+
     // Should return results for all nodes (even if they fail due to no OPC server)
     EXPECT_EQ(results.size(), expiredNodes.size());
-    
+
     // All results should have the correct node IDs
     for (size_t i = 0; i < results.size(); ++i) {
         EXPECT_EQ(results[i].id, expiredNodes[i]);
+    }
+}
+
+// ============================================================================
+// ENHANCED BATCH PROCESSING TESTS
+// ============================================================================
+
+TEST_F(ReadStrategyTest, BatchProcessingEmptyPlan) {
+    // Test executing an empty batch plan
+    ReadStrategy::BatchReadPlan emptyPlan;
+    auto results = readStrategy_->executeBatchPlan(emptyPlan);
+    EXPECT_TRUE(results.empty());
+}
+
+TEST_F(ReadStrategyTest, BatchProcessingFreshNodesOnly) {
+    // Add fresh cache entries
+    cacheManager_->updateCache("ns=2;s=Node1", "100", "Good", "Success", 1000);
+    cacheManager_->updateCache("ns=2;s=Node2", "200", "Good", "Success", 2000);
+
+    // Create plan with only fresh nodes
+    ReadStrategy::BatchReadPlan plan;
+    plan.freshNodes = {"ns=2;s=Node1", "ns=2;s=Node2"};
+
+    auto results = readStrategy_->executeBatchPlan(plan);
+    ASSERT_EQ(results.size(), 2);
+
+    // Fresh nodes should return cached data immediately
+    EXPECT_EQ(results[0].id, "ns=2;s=Node1");
+    EXPECT_TRUE(results[0].success);
+    EXPECT_EQ(results[0].value, "100");
+
+    EXPECT_EQ(results[1].id, "ns=2;s=Node2");
+    EXPECT_TRUE(results[1].success);
+    EXPECT_EQ(results[1].value, "200");
+}
+
+TEST_F(ReadStrategyTest, BatchProcessingStaleNodesWithBackgroundUpdate) {
+    // Add stale cache entries
+    auto staleEntry1 = CacheManager::CacheEntry{};
+    staleEntry1.nodeId = "ns=2;s=StaleNode1";
+    staleEntry1.value = "100";
+    staleEntry1.status = "Good";
+    staleEntry1.reason = "Good";
+    staleEntry1.timestamp = 1000;
+    staleEntry1.creationTime = std::chrono::steady_clock::now() - std::chrono::seconds(5);
+    cacheManager_->addCacheEntry("ns=2;s=StaleNode1", staleEntry1);
+
+    // Create plan with stale nodes
+    ReadStrategy::BatchReadPlan plan;
+    plan.staleNodes = {"ns=2;s=StaleNode1"};
+
+    auto results = readStrategy_->executeBatchPlan(plan);
+    ASSERT_EQ(results.size(), 1);
+
+    // Stale nodes should return cached data immediately
+    EXPECT_EQ(results[0].id, "ns=2;s=StaleNode1");
+    EXPECT_TRUE(results[0].success);
+    EXPECT_EQ(results[0].value, "100");
+
+    // Background update should be scheduled (we can't easily verify this without mock)
+}
+
+TEST_F(ReadStrategyTest, BatchProcessingLargeNodeList) {
+    // Test batch processing with many nodes
+    std::vector<std::string> largeNodeList;
+    for (int i = 0; i < 50; ++i) {
+        largeNodeList.push_back("ns=2;s=Node" + std::to_string(i));
+    }
+
+    auto plan = readStrategy_->createBatchPlan(largeNodeList);
+    EXPECT_EQ(plan.getTotalNodes(), 50);
+
+    // Execute the plan
+    auto results = readStrategy_->executeBatchPlan(plan);
+    EXPECT_EQ(results.size(), 50);
+
+    // Verify all node IDs are present in results
+    for (size_t i = 0; i < results.size(); ++i) {
+        EXPECT_EQ(results[i].id, largeNodeList[i]);
+    }
+}
+
+TEST_F(ReadStrategyTest, BatchProcessingMixedStates) {
+    // Setup cache with different states
+    // Fresh node (< 3s)
+    cacheManager_->updateCache("ns=2;s=FreshNode", "100", "Good", "Success", 1000);
+
+    // Stale node (> 3s but < 10s)
+    auto staleEntry = CacheManager::CacheEntry{};
+    staleEntry.nodeId = "ns=2;s=StaleNode";
+    staleEntry.value = "200";
+    staleEntry.status = "Good";
+    staleEntry.reason = "Good";
+    staleEntry.timestamp = 2000;
+    staleEntry.creationTime = std::chrono::steady_clock::now() - std::chrono::seconds(5);
+    cacheManager_->addCacheEntry("ns=2;s=StaleNode", staleEntry);
+
+    // Expired/missing node
+    std::vector<std::string> nodeIds = {
+        "ns=2;s=FreshNode",
+        "ns=2;s=StaleNode",
+        "ns=2;s=ExpiredNode"
+    };
+
+    auto plan = readStrategy_->createBatchPlan(nodeIds);
+    auto results = readStrategy_->executeBatchPlan(plan);
+
+    ASSERT_EQ(results.size(), 3);
+
+    // Verify results are in correct order
+    EXPECT_EQ(results[0].id, "ns=2;s=FreshNode");
+    EXPECT_EQ(results[1].id, "ns=2;s=StaleNode");
+    EXPECT_EQ(results[2].id, "ns=2;s=ExpiredNode");
+}
+
+// ============================================================================
+// ENHANCED CONCURRENCY CONTROL TESTS
+// ============================================================================
+
+TEST_F(ReadStrategyTest, ConcurrencyControlMultipleNodes) {
+    // Test concurrent access to different nodes
+    const int numThreads = 10;
+    std::vector<std::thread> threads;
+    std::vector<ReadResult> results(numThreads);
+    std::atomic<int> completedReads{0};
+
+    readStrategy_->enableConcurrencyControl(true);
+
+    // Each thread reads a different node
+    for (int i = 0; i < numThreads; ++i) {
+        threads.emplace_back([&, i]() {
+            std::string nodeId = "ns=2;s=Node" + std::to_string(i);
+            results[i] = readStrategy_->processNodeRequest(nodeId);
+            completedReads++;
+        });
+    }
+
+    // Wait for all threads
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    EXPECT_EQ(completedReads.load(), numThreads);
+
+    // Verify each result has correct node ID
+    for (int i = 0; i < numThreads; ++i) {
+        EXPECT_EQ(results[i].id, "ns=2;s=Node" + std::to_string(i));
+    }
+}
+
+TEST_F(ReadStrategyTest, ConcurrencyControlDisabled) {
+    // Test that disabling concurrency control still works
+    readStrategy_->enableConcurrencyControl(false);
+    EXPECT_FALSE(readStrategy_->isConcurrencyControlEnabled());
+
+    const std::string testNodeId = "ns=2;s=TestNode";
+    const int numThreads = 5;
+    std::vector<std::thread> threads;
+    std::atomic<int> completedReads{0};
+
+    // Launch concurrent reads with concurrency control disabled
+    for (int i = 0; i < numThreads; ++i) {
+        threads.emplace_back([&]() {
+            auto result = readStrategy_->processNodeRequest(testNodeId);
+            completedReads++;
+        });
+    }
+
+    // Wait for all threads
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    EXPECT_EQ(completedReads.load(), numThreads);
+}
+
+TEST_F(ReadStrategyTest, ConcurrencyControlMaxReadsLimit) {
+    // Test max concurrent reads configuration
+    readStrategy_->setMaxConcurrentReads(3);
+    EXPECT_EQ(readStrategy_->getMaxConcurrentReads(), 3);
+
+    // Launch more threads than max concurrent reads
+    const int numThreads = 10;
+    std::vector<std::thread> threads;
+    std::atomic<int> completedReads{0};
+    std::atomic<int> activeReads{0};
+    std::atomic<int> maxActiveReads{0};
+
+    for (int i = 0; i < numThreads; ++i) {
+        threads.emplace_back([&, i]() {
+            std::string nodeId = "ns=2;s=Node" + std::to_string(i % 5); // Reuse some node IDs
+
+            int current = activeReads.fetch_add(1) + 1;
+            int expected = maxActiveReads.load();
+            while (current > expected && !maxActiveReads.compare_exchange_weak(expected, current)) {
+                expected = maxActiveReads.load();
+            }
+
+            auto result = readStrategy_->processNodeRequest(nodeId);
+
+            activeReads.fetch_sub(1);
+            completedReads++;
+        });
+    }
+
+    // Wait for all threads
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    EXPECT_EQ(completedReads.load(), numThreads);
+}
+
+TEST_F(ReadStrategyTest, ConcurrencyControlBatchRequests) {
+    // Test concurrent batch requests
+    const int numThreads = 5;
+    std::vector<std::thread> threads;
+    std::vector<std::vector<ReadResult>> allResults(numThreads);
+    std::atomic<int> completedBatches{0};
+
+    readStrategy_->enableConcurrencyControl(true);
+
+    for (int i = 0; i < numThreads; ++i) {
+        threads.emplace_back([&, i]() {
+            std::vector<std::string> nodeIds;
+            for (int j = 0; j < 5; ++j) {
+                nodeIds.push_back("ns=2;s=Thread" + std::to_string(i) + "_Node" + std::to_string(j));
+            }
+
+            allResults[i] = readStrategy_->processNodeRequests(nodeIds);
+            completedBatches++;
+        });
+    }
+
+    // Wait for all threads
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    EXPECT_EQ(completedBatches.load(), numThreads);
+
+    // Verify each batch has correct number of results
+    for (int i = 0; i < numThreads; ++i) {
+        EXPECT_EQ(allResults[i].size(), 5);
     }
 }

@@ -102,6 +102,7 @@ if(BUILD_TESTS)
         tests/unit/test_error_handler.cpp
         tests/unit/test_read_strategy.cpp
         tests/unit/test_background_updater.cpp
+        tests/unit/test_performance.cpp
         # Integration tests
         tests/integration/test_end_to_end.cpp
         # Source files needed for tests
