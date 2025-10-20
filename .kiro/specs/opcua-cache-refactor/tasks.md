@@ -149,13 +149,13 @@
     - _Requirements: 4.1, 4.2, 4.3, 4.5, 4.6_
 
 - [ ] 6. Enhance OPCUAClient for Cache-Based Operations
-  - [ ] 6.1 Implement batch reading capabilities
+  - [x] 6.1 Implement batch reading capabilities
     - Add readNodesBatch() method for efficient multi-node reads
     - Optimize OPC UA client for batch operations instead of individual reads
     - Implement connection pooling for concurrent batch operations
     - _Requirements: 3.2, 3.3_
 
-  - [ ] 6.2 Add enhanced connection state management
+  - [x] 6.2 Add enhanced connection state management
     - Implement detailed ConnectionState enum (CONNECTED, DISCONNECTED, CONNECTING, ERROR)
     - Add getConnectionState() and getLastError() methods for cache fallback decisions
     - Implement connection timeout and retry configuration
