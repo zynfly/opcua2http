@@ -243,149 +243,62 @@
     - Create performance tuning recommendations based on metrics
     - _Requirements: 6.1, 6.2, 7.4_
 
-- [ ] 11. Update Configuration System
-  - [ ] 11.1 Add cache configuration structure
-    - Create CacheConfiguration struct with timing parameters
-    - Implement configuration validation and auto-correction
-    - Add loadCacheSettings() method to Configuration class
-    - _Requirements: 8.1, 8.2, 8.3, 8.4_
+- [ ] 11. Fix API Cache Strategy Implementation
+  - [ ] 11.1 Implement correct cache miss handling
+    - When cache has no data (CACHE_MISS), directly read from OPC UA server
+    - Update cache with fresh data and return response immediately
+    - Add proper error handling for OPC UA read failures
+    - _Requirements: 1.4, 2.1_
 
-  - [ ] 11.2 Add performance and background update configuration
-    - Add background update thread configuration
-    - Implement OPC UA connection pool and timeout settings
-    - Add memory management and concurrency control parameters
-    - _Requirements: 8.4, Design Configuration Management_
+  - [ ] 11.2 Implement stale cache handling with background update
+    - When cache data exists but exceeds refresh threshold (STALE, 3-10 seconds)
+    - Return cached data immediately to client for fast response
+    - Schedule background update task to refresh cache asynchronously
+    - Ensure background update doesn't block API response
+    - _Requirements: 1.3, 3.2_
 
-  - [ ] 11.3 Implement configuration validation and error handling
-    - Create ConfigurationValidator class for comprehensive validation
-    - Add auto-correction for invalid configuration values
-    - Implement configuration change monitoring and hot-reload capability
-    - _Requirements: 8.4_
+  - [ ] 11.3 Implement expired cache handling
+    - When cache data exceeds expiration time (EXPIRED, > 10 seconds)
+    - Treat as cache miss and synchronously read from OPC UA server
+    - Update cache with fresh data before returning response
+    - Remove or update expired entries during the process
+    - _Requirements: 1.4, 2.2, 2.3_
 
-- [ ] 12. Integration and Compatibility Testing
-  - [ ] 12.1 Ensure complete API compatibility
-    - Verify /iotgateway/read endpoint behavior matches existing implementation
-    - Test JSON response format compatibility with existing clients
-    - Validate authentication and CORS functionality remains unchanged
-    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6_
+  - [ ] 11.4 Update ReadStrategy to follow correct flow
+    - Modify processNodeRequest() to implement the three-path strategy
+    - Ensure proper cache status evaluation (FRESH/STALE/EXPIRED/MISS)
+    - Coordinate between synchronous reads and background updates
+    - Add logging to track which path each request takes
+    - _Requirements: 1.2, 1.3, 1.4, 3.1_
 
-  - [ ] 12.2 Test cache timing behavior
-    - Verify 3-second refresh threshold behavior (return cache + background update)
-    - Test 10-second expiration behavior (synchronous reload)
-    - Validate cache cleanup and memory management
-    - _Requirements: 1.2, 1.3, 1.4, 2.2, 2.3, 2.4_
+- [ ] 12. Core Testing and Validation
+  - [ ] 12.1 Essential unit tests
+    - Test CacheManager timing logic (fresh/stale/expired states)
+    - Test ReadStrategy batch processing and concurrency control
+    - Test error handling and cache fallback scenarios
+    - _Requirements: 1.2, 1.3, 1.4, 3.1, 3.4, 5.1, 5.2_
 
-  - [ ] 12.3 Performance and concurrency testing
-    - Test high-concurrency scenarios with multiple clients
-    - Validate batch processing performance and correctness
-    - Test error handling and fallback mechanisms under load
-    - _Requirements: 3.4, 7.1, 7.2, 7.3, 7.4_
+  - [ ] 12.2 Integration testing
+    - Test end-to-end cache flow with real OPC UA server
+    - Verify API compatibility (/iotgateway/read endpoint)
+    - Test concurrent requests and batch operations
+    - Test OPC UA disconnection and recovery
+    - _Requirements: 4.1, 4.2, 7.1, 7.2_
 
-- [ ] 13. Comprehensive Unit Testing
-  - [ ] 13.1 CacheManager unit tests
-    - Test cache age evaluation methods (isWithinRefreshThreshold, isExpired, getAge)
-    - Test CacheStatus enumeration and getCachedValueWithStatus functionality
-    - Test batch operations (getCachedValuesWithStatus, updateCacheBatch)
-    - Test concurrency control with multiple threads accessing cache
-    - _Requirements: 1.2, 1.3, 1.4, 2.1, 2.2, 2.3, 9.1, 9.2_
+  - [ ] 12.3 Basic performance validation
+    - Verify cache hit response times are acceptable
+    - Test system stability under normal load
+    - Validate memory usage is reasonable
+    - _Requirements: 6.1, 6.2, 7.4_
 
-  - [ ] 13.2 ReadStrategy unit tests
-    - Test cache status evaluation and decision logic for FRESH/STALE/EXPIRED states
-    - Test batch processing optimization with BatchReadPlan
-    - Test concurrency control for duplicate requests (acquireReadLock/releaseReadLock)
-    - Test error handling when OPC UA client fails
-    - _Requirements: 1.2, 1.3, 1.4, 3.1, 3.2, 3.4, 7.1, 7.2_
-
-  - [ ] 13.3 BackgroundUpdater unit tests
-    - Test background update queue and threading functionality
-    - Test update deduplication and scheduling logic
-    - Test worker thread pool management and graceful shutdown
-    - Test update statistics tracking and monitoring
-    - _Requirements: 1.3, 3.2, 6.1, 6.2_
-
-  - [ ] 13.4 Configuration system unit tests
-    - Test cache configuration loading from environment variables
-    - Test configuration validation and auto-correction
-    - Test invalid configuration handling and default value fallback
-    - Test ConfigurationValidator functionality
-    - _Requirements: 8.1, 8.2, 8.3, 8.4_
-
-  - [ ] 13.5 Error handling unit tests
-    - Test CacheErrorHandler decision logic for different error scenarios
-    - Test cache fallback when OPC UA server is unavailable
-    - Test error response formatting and compatibility
-    - Test connection state management and recovery
-    - _Requirements: 5.1, 5.2, 5.3, 5.4_
-
-- [ ] 14. Integration Testing
-  - [ ] 14.1 End-to-end cache flow integration tests
-    - Test fresh cache hit scenario (< 3 seconds, direct return)
-    - Test stale cache background update scenario (3-10 seconds, return cache + background update)
-    - Test expired cache reload scenario (> 10 seconds, synchronous reload)
-    - Test concurrent requests for same NodeId (request deduplication)
-    - _Requirements: 1.2, 1.3, 1.4, 3.4, 7.1, 7.2_
-
-  - [ ] 14.2 Batch processing integration tests
-    - Test mixed cache states in single batch request
-    - Test batch OPC UA read operations and cache updates
-    - Test batch processing performance and correctness
-    - Test error handling in batch operations
-    - _Requirements: 3.1, 3.2, 3.3_
-
-  - [ ] 14.3 API compatibility integration tests
-    - Test /iotgateway/read endpoint with existing client requests
-    - Test JSON response format compatibility (nodeId, success, quality, value, timestamp_iso fields)
-    - Test authentication mechanisms (API key, Basic auth)
-    - Test CORS functionality and error response formats
-    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6_
-
-  - [ ] 14.4 Error scenario integration tests
-    - Test OPC UA server disconnection during operation
-    - Test cache fallback when server is unavailable
-    - Test partial failures in batch operations
-    - Test system recovery after OPC UA reconnection
-    - _Requirements: 5.1, 5.2, 5.3, 5.4_
-
-- [ ] 15. Performance and Load Testing
-  - [ ] 15.1 Cache performance testing
-    - Benchmark cache hit response times (target < 1ms)
-    - Test cache memory usage with 1000+ entries
-    - Measure cache cleanup performance and impact
-    - Test cache efficiency under different access patterns
-    - _Requirements: 6.1, 6.2, 7.4, 9.3_
-
-  - [ ] 15.2 Concurrency and scalability testing
-    - Test 20+ concurrent clients accessing same and different nodes
-    - Measure lock contention and wait times under high load
-    - Test background update performance with high queue volume
-    - Validate system stability under sustained load
-    - _Requirements: 7.1, 7.2, 7.3, 7.4, 9.1, 9.2_
-
-  - [ ] 15.3 OPC UA batch operation performance testing
-    - Benchmark batch read operations vs individual reads
-    - Test optimal batch sizes for different scenarios
-    - Measure network efficiency and connection utilization
-    - Test connection pooling performance and resource usage
-    - _Requirements: 3.1, 3.2, 3.3_
-
-- [ ] 16. System Testing and Validation
-  - [ ] 16.1 Complete system functionality testing
-    - Test entire system with real OPC UA server
-    - Validate all configuration parameters and their effects
-    - Test system startup, shutdown, and restart scenarios
-    - Verify logging and monitoring functionality
-    - _Requirements: All requirements validation_
-
-  - [ ] 16.2 Compatibility and regression testing
-    - Test with existing client applications and configurations
-    - Validate no breaking changes in API behavior
-    - Test migration from subscription-based to cache-based system
-    - Verify performance improvements and stability
-    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6_
-
-  - [ ] 16.3 Documentation and deployment testing
-    - Test configuration documentation and examples
-    - Validate deployment procedures and requirements
-    - Test monitoring and troubleshooting procedures
-    - Create performance tuning guidelines and validation
-    - _Requirements: System deployment and maintenance_
+- [ ] 13. Update README.md Documentation
+  - Update README.md with comprehensive documentation including:
+    - Cache-based architecture overview and timing behavior (3s refresh, 10s expiration)
+    - API endpoint documentation with cache behavior details
+    - Configuration parameters reference (all CACHE_* environment variables)
+    - Monitoring and cache statistics interpretation
+    - Performance tuning guidelines and best practices
+    - Error handling and fallback behavior
+    - Deployment guide and example configurations
+    - Troubleshooting guide for common issues
+  - _Requirements: 4.1, 5.1, 5.2, 6.1, 6.2, 6.3, 8.1, 8.2, 8.3, 8.4_
