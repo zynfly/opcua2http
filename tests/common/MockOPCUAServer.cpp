@@ -24,13 +24,13 @@ bool MockOPCUAServer::start() {
         logMessage("Server already running");
         return true;
     }
-    
+
     server_ = UA_Server_new();
     if (!server_) {
         logMessage("Failed to create UA_Server");
         return false;
     }
-    
+
     // Configure server
     UA_ServerConfig* config = UA_Server_getConfig(server_);
     UA_StatusCode status = UA_ServerConfig_setMinimal(config, port_, nullptr);
@@ -40,22 +40,22 @@ bool MockOPCUAServer::start() {
         server_ = nullptr;
         return false;
     }
-    
+
     // Add test namespace
     testNamespaceIndex_ = UA_Server_addNamespace(server_, namespaceName_.c_str());
     logMessage("Added namespace '" + namespaceName_ + "' with index: " + std::to_string(testNamespaceIndex_));
-    
+
     // Add any pre-configured test variables
     for (const auto& testVar : testVariables_) {
         addTestVariableInternal(testVar.nodeId, testVar.name, testVar.value);
     }
-    
+
     // Start server in separate thread
     running_ = true;
     serverReady_ = false;
-    
+
     serverThread_ = std::thread(&MockOPCUAServer::serverThreadFunction, this);
-    
+
     // Wait for server to be ready
     return waitForServerReady();
 }
@@ -63,22 +63,43 @@ bool MockOPCUAServer::start() {
 void MockOPCUAServer::stop() {
     if (running_) {
         running_ = false;
-        
+
         // Give server thread time to notice the stop signal
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        
+
         if (serverThread_.joinable()) {
             serverThread_.join();
         }
     }
-    
+
     if (server_) {
         UA_Server_delete(server_);
         server_ = nullptr;
     }
-    
+
     serverReady_ = false;
     logMessage("Mock OPC UA server stopped");
+}
+
+bool MockOPCUAServer::restart() {
+    logMessage("Restarting mock OPC UA server...");
+
+    // Stop the server
+    stop();
+
+    // Add a small delay to ensure clean shutdown
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Start the server again
+    bool success = start();
+
+    if (success) {
+        logMessage("Mock OPC UA server restarted successfully");
+    } else {
+        logMessage("Failed to restart mock OPC UA server");
+    }
+
+    return success;
 }
 
 std::string MockOPCUAServer::getEndpoint() const {
@@ -101,12 +122,12 @@ void MockOPCUAServer::addStandardTestVariables() {
     UA_Variant intValue = TestValueFactory::createInt32(42);
     addTestVariable(1001, "TestInt", intValue);
     UA_Variant_clear(&intValue);
-    
+
     // String variable
     UA_Variant stringValue = TestValueFactory::createString("Hello World");
     addTestVariable(1002, "TestString", stringValue);
     UA_Variant_clear(&stringValue);
-    
+
     // Boolean variable
     UA_Variant boolValue = TestValueFactory::createBoolean(true);
     addTestVariable(1003, "TestBool", boolValue);
@@ -115,10 +136,10 @@ void MockOPCUAServer::addStandardTestVariables() {
 
 void MockOPCUAServer::updateTestVariable(UA_UInt32 nodeId, const UA_Variant& newValue) {
     if (!server_) return;
-    
+
     UA_NodeId testNodeId = UA_NODEID_NUMERIC(testNamespaceIndex_, nodeId);
     UA_StatusCode status = UA_Server_writeValue(server_, testNodeId, newValue);
-    
+
     if (status == UA_STATUSCODE_GOOD) {
         logMessage("Updated variable ns=" + std::to_string(testNamespaceIndex_) + ";i=" + std::to_string(nodeId));
     } else {
@@ -138,16 +159,16 @@ void MockOPCUAServer::serverThreadFunction() {
         running_ = false;
         return;
     }
-    
+
     serverReady_ = true;
     logMessage("Mock OPC UA server started on port " + std::to_string(port_));
-    
+
     // Run server loop
     while (running_) {
         UA_Server_run_iterate(server_, true);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    
+
     // Shutdown server
     UA_Server_run_shutdown(server_);
 }
@@ -155,7 +176,7 @@ void MockOPCUAServer::serverThreadFunction() {
 bool MockOPCUAServer::waitForServerReady() {
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::milliseconds(startupTimeoutMs_);
-    
+
     while (!serverReady_ && running_) {
         auto elapsed = std::chrono::steady_clock::now() - startTime;
         if (elapsed > timeout) {
@@ -163,14 +184,14 @@ bool MockOPCUAServer::waitForServerReady() {
             stop();
             return false;
         }
-        
+
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    
+
     if (!serverReady_) {
         return false;
     }
-    
+
     // Additional wait to ensure server is fully ready
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     return true;
@@ -178,13 +199,13 @@ bool MockOPCUAServer::waitForServerReady() {
 
 bool MockOPCUAServer::addTestVariableInternal(UA_UInt32 nodeId, const std::string& name, const UA_Variant& value) {
     if (!server_) return false;
-    
+
     UA_VariableAttributes attr = UA_VariableAttributes_default;
     attr.displayName = UA_LOCALIZEDTEXT(const_cast<char*>("en-US"), const_cast<char*>(name.c_str()));
-    
+
     // Copy the value
     UA_Variant_copy(&value, &attr.value);
-    
+
     // Set appropriate data type and attributes based on variant type
     if (value.type == &UA_TYPES[UA_TYPES_INT32]) {
         attr.dataType = UA_TYPES[UA_TYPES_INT32].typeId;
@@ -197,21 +218,21 @@ bool MockOPCUAServer::addTestVariableInternal(UA_UInt32 nodeId, const std::strin
     } else if (value.type == &UA_TYPES[UA_TYPES_FLOAT]) {
         attr.dataType = UA_TYPES[UA_TYPES_FLOAT].typeId;
     }
-    
+
     attr.valueRank = UA_VALUERANK_SCALAR;
     attr.accessLevel = UA_ACCESSLEVELMASK_READ | UA_ACCESSLEVELMASK_WRITE;
     attr.userAccessLevel = UA_ACCESSLEVELMASK_READ | UA_ACCESSLEVELMASK_WRITE;
-    
+
     UA_NodeId newNodeId = UA_NODEID_NUMERIC(testNamespaceIndex_, nodeId);
     UA_NodeId parentNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER);
     UA_NodeId parentReferenceNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES);
     UA_NodeId variableType = UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE);
     UA_QualifiedName browseName = UA_QUALIFIEDNAME(testNamespaceIndex_, const_cast<char*>(name.c_str()));
-    
+
     UA_StatusCode status = UA_Server_addVariableNode(server_, newNodeId, parentNodeId,
                               parentReferenceNodeId, browseName,
                               variableType, attr, nullptr, nullptr);
-    
+
     if (status != UA_STATUSCODE_GOOD) {
         logMessage("Failed to add variable '" + name + "': " + std::string(UA_StatusCode_name(status)));
         return false;

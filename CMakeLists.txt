@@ -105,6 +105,7 @@ if(BUILD_TESTS)
         tests/unit/test_performance.cpp
         # Integration tests
         tests/integration/test_end_to_end.cpp
+        tests/integration/test_reconnection_server_restart.cpp
         # Source files needed for tests
         src/config/Configuration.cpp
         src/core/ErrorHandler.cpp

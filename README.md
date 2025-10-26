@@ -241,10 +241,45 @@ OPC_APPLICATION_URI=urn:CLIENT:NodeOPCUA-Client # Client application URI
 ```bash
 CONNECTION_RETRY_MAX=5                     # Max retries per connection attempt
 CONNECTION_INITIAL_DELAY=1000              # Initial delay before first attempt (ms)
-CONNECTION_MAX_RETRY=10                    # Global max reconnection attempts (-1 for infinite)
+CONNECTION_MAX_RETRY=5                     # Max reconnection attempts per cycle
 CONNECTION_MAX_DELAY=10000                 # Max delay between retries (ms)
-CONNECTION_RETRY_DELAY=5000                # Base delay between retries (ms)
+CONNECTION_RETRY_DELAY=500                 # Base delay between retries (ms)
 ```
+
+#### Connection Retry Behavior
+
+The system uses a two-phase retry strategy when the OPC UA server connection is lost:
+
+**Phase 1: Exponential Backoff (Attempts 1 to CONNECTION_MAX_RETRY)**
+- Delay increases exponentially with each attempt
+- Formula: `CONNECTION_RETRY_DELAY * 2^(attempt-1)`
+- Capped at `CONNECTION_MAX_DELAY` (default: 10 seconds)
+- Example with defaults: 500ms → 1s → 2s → 4s → 8s
+
+**Phase 2: Reset and Retry**
+- After reaching `CONNECTION_MAX_RETRY` attempts, system waits `2 * CONNECTION_MAX_DELAY`
+- Retry counter is reset to 0
+- Phase 1 begins again with exponential backoff
+
+**Example Timeline** (with default settings):
+```
+0.0s:  Attempt 1 (delay: 500ms)
+0.5s:  Attempt 2 (delay: 1s)
+1.5s:  Attempt 3 (delay: 2s)
+3.5s:  Attempt 4 (delay: 4s)
+7.5s:  Attempt 5 (delay: 8s) - Max retries reached
+27.5s: Wait period ends, counter reset
+28.0s: Attempt 1 begins again (delay: 500ms)
+...cycle repeats...
+```
+
+**Important Notes**:
+- There is a 20-second gap (2 * 10s) between retry cycles by default
+- The system will continue retrying indefinitely until connection is restored
+- If your OPC UA server typically has longer downtimes, consider:
+  - Increasing `CONNECTION_MAX_RETRY` to reduce gap frequency
+  - Adjusting `CONNECTION_MAX_DELAY` to control the maximum wait time
+- For most scenarios, the default settings provide good balance between responsiveness and server load
 
 ### Web Server Settings
 
