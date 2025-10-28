@@ -432,6 +432,9 @@ bool ReconnectionManager::attemptReconnection() {
     bool wasConnected = opcClient_->isConnected();
 
     try {
+        // Force disconnect before reconnecting (safe even if already disconnected)
+        opcClient_->disconnect();
+
         // Attempt to reconnect
         success = opcClient_->connect();
 
