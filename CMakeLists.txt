@@ -62,6 +62,9 @@ if(MSVC)
     target_compile_definitions(opcua2http PRIVATE _WIN32_WINNT=0x0601 WIN32_LEAN_AND_MEAN NOMINMAX)
 else()
     target_compile_options(opcua2http PRIVATE -Wall -Wextra -Wpedantic)
+    if (MINGW)
+        target_link_libraries(opcua2http PRIVATE Mswsock)
+    endif ()
 endif()
 
 # Platform-specific definitions
@@ -155,6 +158,10 @@ if(BUILD_TESTS)
     if(WIN32)
         target_compile_definitions(opcua2http_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
+
+    if (MINGW)
+        target_link_libraries(opcua2http_tests PRIVATE Mswsock)
+    endif ()
 
     # Register tests with CTest
     include(GoogleTest)
