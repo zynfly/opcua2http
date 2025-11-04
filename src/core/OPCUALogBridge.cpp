@@ -22,6 +22,7 @@ void OPCUALogBridge::setLogLevel(UA_LogLevel level) {
 
 void OPCUALogBridge::logCallback(void* logContext, UA_LogLevel level, 
                                 UA_LogCategory category, const char* msg, va_list args) {
+    (void)logContext;
     // Skip if below minimum level
     if (level < minLogLevel_) {
         return;
@@ -63,7 +64,7 @@ void OPCUALogBridge::logCallback(void* logContext, UA_LogLevel level,
     }
 }
 
-void OPCUALogBridge::clearCallback(UA_Logger* logger) {
+void OPCUALogBridge::clearCallback(void* logger) {
     // No cleanup needed for spdlog
     (void)logger; // Suppress unused parameter warning
 }

@@ -45,7 +45,7 @@ private:
      * @brief Callback function for logger cleanup
      * @param logger Logger to clean up
      */
-    static void clearCallback(UA_Logger* logger);
+    static void clearCallback(void* logger);
     
     /**
      * @brief Convert OPC UA log level to spdlog level
