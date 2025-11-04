@@ -132,7 +132,16 @@ crow::response APIHandler::handleReadRequest(const crow::request& req) {
         }
 
         // Extract node IDs from query parameter
-        std::string idsParam = req.url_params.get("ids");
+        std::string idsParam;
+        try {
+            const char* idsParamPtr = req.url_params.get("ids");
+            if (idsParamPtr != nullptr) {
+                idsParam = std::string(idsParamPtr);
+            }
+        } catch (...) {
+            // If url_params access fails, idsParam remains empty
+        }
+
         if (idsParam.empty()) {
             validationErrors_++;
             return buildErrorResponse(400, "Bad Request", "Missing 'ids' parameter");
@@ -174,7 +183,16 @@ crow::response APIHandler::handleReadRequest(const crow::request& req) {
             !opcClient_->isConnected()) {
 
             // Try to extract node IDs for cache fallback
-            std::string idsParam = req.url_params.get("ids");
+            std::string idsParam;
+            try {
+                const char* idsParamPtr = req.url_params.get("ids");
+                if (idsParamPtr != nullptr) {
+                    idsParam = std::string(idsParamPtr);
+                }
+            } catch (...) {
+                // If url_params access fails, idsParam remains empty
+            }
+
             if (!idsParam.empty()) {
                 std::vector<std::string> nodeIds = parseNodeIds(idsParam);
                 if (!nodeIds.empty()) {
