@@ -20,23 +20,25 @@ void OPCUALogBridge::setLogLevel(UA_LogLevel level) {
     minLogLevel_ = level;
 }
 
-void OPCUALogBridge::logCallback(void* logContext, UA_LogLevel level, 
+void OPCUALogBridge::logCallback(void* logContext, UA_LogLevel level,
                                 UA_LogCategory category, const char* msg, va_list args) {
+    (void)logContext; // Suppress unused parameter warning
+
     // Skip if below minimum level
     if (level < minLogLevel_) {
         return;
     }
-    
+
     // Format the message with variable arguments
     char buffer[1024];
     vsnprintf(buffer, sizeof(buffer), msg, args);
-    
+
     // Create formatted message with category
     std::string formattedMsg = "[OPC UA][";
     formattedMsg += getCategoryName(category);
     formattedMsg += "] ";
     formattedMsg += buffer;
-    
+
     // Convert and log through spdlog
     switch (level) {
         case UA_LOGLEVEL_TRACE:
@@ -63,7 +65,7 @@ void OPCUALogBridge::logCallback(void* logContext, UA_LogLevel level,
     }
 }
 
-void OPCUALogBridge::clearCallback(UA_Logger* logger) {
+void OPCUALogBridge::clearCallback(struct UA_Logger* logger) {
     // No cleanup needed for spdlog
     (void)logger; // Suppress unused parameter warning
 }
