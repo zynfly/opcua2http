@@ -220,6 +220,7 @@ void Configuration::loadCacheSettings() {
     
     // OPC UA Optimization Configuration
     opcReadTimeoutMs = getEnvInt("OPC_READ_TIMEOUT_MS", 5000);
+    opcConnectionTimeoutMs = getEnvInt("OPC_CONNECTION_TIMEOUT_MS", 10000);
     opcBatchSize = getEnvInt("OPC_BATCH_SIZE", 50);
     opcConnectionPoolSize = getEnvInt("OPC_CONNECTION_POOL_SIZE", 5);
 }
