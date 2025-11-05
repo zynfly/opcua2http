@@ -323,32 +323,21 @@ void ReconnectionManager::monitoringLoop() {
                     handleConnectionStateChange(true, true);
                     updateState(ReconnectionState::MONITORING);
                 } else {
-                    // Reconnection failed, wait before next attempt
-                    if (!hasReachedMaxRetries()) {
-                        auto delay = calculateRetryDelay(currentRetryAttempt_.load());
-                        nextAttemptTime_ = std::chrono::steady_clock::now() + delay;
+                    // Reconnection failed, wait 1 second before next attempt
+                    // This ensures we try to reconnect every second as required
+                    auto delay = std::chrono::milliseconds(1000);  // Fixed 1-second interval
+                    nextAttemptTime_ = std::chrono::steady_clock::now() + delay;
 
-                        if (detailedLoggingEnabled_.load()) {
-                            std::ostringstream oss;
-                            oss << "Waiting " << delay.count() << "ms before next reconnection attempt";
-                            logActivity(oss.str());
-                        }
-
-                        if (!waitOrStop(delay)) {
-                            // Monitoring was stopped during wait
-                            break;
-                        }
-                    } else {
+                    if (detailedLoggingEnabled_.load()) {
                         std::ostringstream oss;
-                        oss << "Maximum retry attempts (" << connectionMaxRetry_ << ") reached, stopping reconnection attempts";
-                        logActivity(oss.str(), true);
+                        oss << "Reconnection attempt " << currentRetryAttempt_.load() 
+                            << " failed, waiting 1 second before next attempt";
+                        logActivity(oss.str());
+                    }
 
-                        // Wait longer before resetting retry counter
-                        auto longDelay = std::chrono::milliseconds(connectionMaxDelay_ * 2);
-                        if (waitOrStop(longDelay)) {
-                            resetRetryAttempts();
-                            logActivity("Retry counter reset, resuming reconnection attempts");
-                        }
+                    if (!waitOrStop(delay)) {
+                        // Monitoring was stopped during wait
+                        break;
                     }
                 }
             } else {
@@ -357,10 +346,10 @@ void ReconnectionManager::monitoringLoop() {
 
             wasConnected = isConnected;
 
-            // Regular monitoring interval (shorter for faster detection in tests)
+            // Regular monitoring interval - faster when disconnected for quicker reconnection
             auto monitorInterval = isConnected ?
                 std::chrono::milliseconds(1000) :  // 1 second when connected
-                std::chrono::milliseconds(500);    // 500ms when disconnected
+                std::chrono::milliseconds(100);    // 100ms when disconnected for faster reconnection
 
             if (!waitOrStop(monitorInterval)) {
                 break;
@@ -424,8 +413,7 @@ bool ReconnectionManager::attemptReconnection() {
     lastAttemptTime_ = std::chrono::steady_clock::now();
 
     std::ostringstream oss;
-    oss << "Attempting reconnection (attempt " << currentRetryAttempt_.load()
-        << " of " << connectionMaxRetry_ << ")";
+    oss << "Attempting reconnection (attempt " << currentRetryAttempt_.load() << ")";
     logActivity(oss.str());
 
     bool success = false;

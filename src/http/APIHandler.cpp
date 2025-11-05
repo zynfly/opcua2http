@@ -195,16 +195,31 @@ crow::response APIHandler::handleReadRequest(const crow::request& req) {
 
 crow::response APIHandler::handleHealthRequest() {
     try {
+        // Perform actual health check
+        bool opcHealthy = opcClient_->performHealthCheck();
+        
         nlohmann::json health = {
-            {"status", "ok"},
+            {"status", opcHealthy ? "ok" : "degraded"},
             {"timestamp", getCurrentTimestamp()},
             {"uptime_seconds", std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::steady_clock::now() - startTime_).count()},
-            {"opc_connected", opcClient_->isConnected()},
+            {"opc_connected", opcHealthy},
             {"opc_endpoint", config_.opcEndpoint},
             {"cached_items", cacheManager_->size()},
             {"version", "1.0.0"}
         };
+        
+        // Add warnings if OPC connection is not healthy
+        if (!opcHealthy) {
+            health["warnings"] = nlohmann::json::array();
+            health["warnings"].push_back("OPC UA server connection is not healthy");
+            
+            // Add more detailed connection info
+            health["opc_details"] = {
+                {"connection_state", static_cast<int>(opcClient_->getConnectionState())},
+                {"last_error", opcClient_->getLastError()}
+            };
+        }
 
         // Add enhanced cache metrics if available
         if (cacheMetrics_) {
@@ -256,9 +271,11 @@ crow::response APIHandler::handleStatusRequest() {
                 std::chrono::steady_clock::now() - startTime_).count()},
             {"opc_ua", {
                 {"connected", opcClient_->isConnected()},
+                {"healthy", opcClient_->performHealthCheck()},
                 {"endpoint", config_.opcEndpoint},
                 {"connection_state", static_cast<int>(opcClient_->getConnectionState())},
-                {"connection_info", opcClient_->getConnectionInfo()}
+                {"connection_info", opcClient_->getConnectionInfo()},
+                {"last_error", opcClient_->getLastError()}
             }},
             {"cache", {
                 {"total_entries", cacheStats.totalEntries},

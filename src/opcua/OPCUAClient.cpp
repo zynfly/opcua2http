@@ -358,7 +358,7 @@ ReadResult OPCUAClient::convertDataValue(const std::string& nodeId, const UA_Dat
     return ReadResult::createSuccess(nodeId, valueStr, timestamp);
 }
 
-std::string OPCUAClient::statusCodeToString(UA_StatusCode statusCode) {
+std::string OPCUAClient::statusCodeToString(UA_StatusCode statusCode) const {
     const char* statusName = UA_StatusCode_name(statusCode);
     if (statusName) {
         return std::string(statusName);
@@ -740,7 +740,61 @@ void OPCUAClient::setConnectionTimeout(std::chrono::milliseconds timeout) {
 }
 
 bool OPCUAClient::isConnectionHealthy() const {
-    return connectionHealthy_.load() && (connectionState_ == ConnectionState::CONNECTED);
+    // First check basic connection state
+    if (!connectionHealthy_.load() || connectionState_ != ConnectionState::CONNECTED) {
+        return false;
+    }
+    
+    // Perform a lightweight health check by reading the server status
+    std::lock_guard<std::mutex> lock(clientMutex_);
+    
+    if (!client_) {
+        return false;
+    }
+    
+    // Try to read the server state node (a standard OPC UA node that should always be available)
+    UA_NodeId serverStateNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER_SERVERSTATUS_STATE);
+    UA_Variant value;
+    UA_Variant_init(&value);
+    
+    UA_StatusCode status = UA_Client_readValueAttribute(client_, serverStateNodeId, &value);
+    UA_Variant_clear(&value);
+    
+    if (status != UA_STATUSCODE_GOOD) {
+        // Connection appears to be broken, update our state
+        spdlog::warn("Connection health check failed: {}", statusCodeToString(status));
+        
+        // Update connection state to reflect the actual situation
+        const_cast<OPCUAClient*>(this)->connectionHealthy_.store(false);
+        const_cast<OPCUAClient*>(this)->updateConnectionState(ConnectionState::CONNECTION_ERROR, status);
+        
+        return false;
+    }
+    
+    return true;
+}
+
+bool OPCUAClient::performHealthCheck() const {
+    // Quick health check without modifying state
+    if (!connectionHealthy_.load() || connectionState_ != ConnectionState::CONNECTED) {
+        return false;
+    }
+    
+    std::lock_guard<std::mutex> lock(clientMutex_);
+    
+    if (!client_) {
+        return false;
+    }
+    
+    // Try to read the server state node (a standard OPC UA node that should always be available)
+    UA_NodeId serverStateNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER_SERVERSTATUS_STATE);
+    UA_Variant value;
+    UA_Variant_init(&value);
+    
+    UA_StatusCode status = UA_Client_readValueAttribute(client_, serverStateNodeId, &value);
+    UA_Variant_clear(&value);
+    
+    return status == UA_STATUSCODE_GOOD;
 }
 
 std::chrono::steady_clock::time_point OPCUAClient::getLastConnectionAttempt() const {
