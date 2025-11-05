@@ -8,6 +8,8 @@
 #include "core/BackgroundUpdater.h"
 #include "core/CacheErrorHandler.h"
 #include "http/APIHandler.h"
+#include "subscription/SubscriptionManager.h"
+#include "reconnection/ReconnectionManager.h"
 #include <iostream>
 #include <csignal>
 #include <chrono>
@@ -108,6 +110,13 @@ void OPCUAHTTPBridge::run() {
         // Start background updater
         backgroundUpdater_->start();
         spdlog::info("✓ Background updater started with {} worker threads", config_->backgroundUpdateThreads);
+
+        // Start reconnection manager
+        if (reconnectionManager_->startMonitoring()) {
+            spdlog::info("✓ Reconnection manager started - automatic reconnection enabled");
+        } else {
+            spdlog::warn("Failed to start reconnection manager");
+        }
 
         // Start cache cleanup thread with enhanced logging
         cleanupThread_ = std::thread([this]() {
@@ -342,6 +351,22 @@ bool OPCUAHTTPBridge::initializeComponents() {
         spdlog::debug("Read strategy initialized with max concurrent reads: {}",
                      config_->cacheConcurrentReads);
 
+        // Initialize SubscriptionManager
+        subscriptionManager_ = std::make_unique<SubscriptionManager>(
+            opcClient_.get(),
+            cacheManager_.get(),
+            config_->subscriptionCleanupMinutes
+        );
+        spdlog::debug("Subscription manager initialized");
+
+        // Initialize ReconnectionManager
+        reconnectionManager_ = std::make_unique<ReconnectionManager>(
+            opcClient_.get(),
+            subscriptionManager_.get(),
+            *config_
+        );
+        spdlog::debug("Reconnection manager initialized");
+
         // Initialize API Handler
         apiHandler_ = std::make_unique<APIHandler>(
             cacheManager_.get(),
@@ -386,6 +411,12 @@ void OPCUAHTTPBridge::cleanup() {
     spdlog::info("Cleaning up resources...");
 
     ErrorHandler::executeWithErrorHandling([this]() {
+        // Stop reconnection manager
+        if (reconnectionManager_) {
+            reconnectionManager_->stopMonitoring();
+            spdlog::debug("Reconnection manager stopped");
+        }
+
         // Stop background updater
         if (backgroundUpdater_) {
             backgroundUpdater_->stop();
@@ -401,6 +432,12 @@ void OPCUAHTTPBridge::cleanup() {
         // Clear all components in reverse order of initialization
         apiHandler_.reset();
         spdlog::debug("API handler cleaned up");
+
+        reconnectionManager_.reset();
+        spdlog::debug("Reconnection manager cleaned up");
+
+        subscriptionManager_.reset();
+        spdlog::debug("Subscription manager cleaned up");
 
         readStrategy_.reset();
         spdlog::debug("Read strategy cleaned up");

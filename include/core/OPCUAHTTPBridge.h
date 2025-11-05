@@ -18,6 +18,8 @@ class APIHandler;
 class ReadStrategy;
 class BackgroundUpdater;
 class CacheErrorHandler;
+class ReconnectionManager;
+class SubscriptionManager;
 
 /**
  * @brief Main application class for the OPC UA HTTP Bridge
@@ -89,6 +91,8 @@ private:
     std::unique_ptr<ReadStrategy> readStrategy_;
     std::unique_ptr<BackgroundUpdater> backgroundUpdater_;
     std::unique_ptr<APIHandler> apiHandler_;
+    std::unique_ptr<SubscriptionManager> subscriptionManager_;
+    std::unique_ptr<ReconnectionManager> reconnectionManager_;
 
     // Crow HTTP application with CORS middleware
     crow::App<crow::CORSHandler> app_;

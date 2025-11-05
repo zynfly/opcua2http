@@ -56,6 +56,7 @@ public:
 
     // NEW: Enhanced connection management
     bool isConnectionHealthy() const;
+    bool performHealthCheck() const;  // Lightweight health check without state changes
     std::chrono::steady_clock::time_point getLastConnectionAttempt() const;
     std::chrono::milliseconds getTimeSinceLastAttempt() const;
 
@@ -90,7 +91,7 @@ private:
                             UA_StatusCode recoveryStatus);
     UA_NodeId parseNodeId(const std::string& nodeIdStr);
     ReadResult convertDataValue(const std::string& nodeId, const UA_DataValue& dataValue);
-    std::string statusCodeToString(UA_StatusCode statusCode);
+    std::string statusCodeToString(UA_StatusCode statusCode) const;
     std::string variantToString(const UA_Variant& variant);
     uint64_t getCurrentTimestamp();
     uint64_t dateTimeToTimestamp(UA_DateTime dateTime);
