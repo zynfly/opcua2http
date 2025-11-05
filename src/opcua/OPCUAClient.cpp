@@ -282,13 +282,41 @@ void OPCUAClient::stateCallback(UA_Client *client,
 
     ConnectionState newState = ConnectionState::DISCONNECTED;
 
-    if (channelState == UA_SECURECHANNELSTATE_OPEN &&
-        sessionState == UA_SESSIONSTATE_ACTIVATED) {
-        newState = ConnectionState::CONNECTED;
-    } else if (channelState == UA_SECURECHANNELSTATE_OPEN) {
+    // Handle session states according to open62541 documentation
+    switch(sessionState) {
+    case UA_SESSIONSTATE_ACTIVATED:
+        if (channelState == UA_SECURECHANNELSTATE_OPEN) {
+            newState = ConnectionState::CONNECTED;
+            spdlog::info("Session activated - connection established");
+        }
+        break;
+    case UA_SESSIONSTATE_CLOSED:
+        // This is triggered when server closes abnormally
+        newState = ConnectionState::DISCONNECTED;
+        spdlog::warn("Session closed - server disconnected abnormally");
+        break;
+    case UA_SESSIONSTATE_CREATE_REQUESTED:
+    case UA_SESSIONSTATE_CREATED:
         newState = ConnectionState::CONNECTING;
-    } else if (recoveryStatus != UA_STATUSCODE_GOOD) {
-        newState = ConnectionState::CONNECTION_ERROR;
+        break;
+    default:
+        // Handle other states based on channel state
+        if (channelState == UA_SECURECHANNELSTATE_OPEN) {
+            newState = ConnectionState::CONNECTING;
+        } else if (channelState == UA_SECURECHANNELSTATE_CLOSED) {
+            newState = ConnectionState::DISCONNECTED;
+        } else if (recoveryStatus != UA_STATUSCODE_GOOD) {
+            newState = ConnectionState::CONNECTION_ERROR;
+        }
+        break;
+    }
+
+    // Log state changes for debugging
+    if (self->connectionState_ != newState) {
+        spdlog::debug("State callback: channel={}, session={}, recovery={}, newState={}",
+                     static_cast<int>(channelState), static_cast<int>(sessionState),
+                     self->statusCodeToString(recoveryStatus),
+                     static_cast<int>(newState));
     }
 
     self->updateConnectionState(newState, recoveryStatus);
