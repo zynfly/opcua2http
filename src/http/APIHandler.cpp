@@ -125,17 +125,19 @@ crow::response APIHandler::handleReadRequest(const crow::request& req) {
     totalRequests_++;
 
     try {
-        // Validate request
-        if (!validateRequest(req)) {
-            validationErrors_++;
-            return buildErrorResponse(400, "Bad Request", "Invalid request parameters");
-        }
+        // Note: We'll do parameter validation inline to provide specific error messages
 
         // Extract node IDs from query parameter
-        std::string idsParam = req.url_params.get("ids");
-        if (idsParam.empty()) {
+        const char* idsParamPtr = req.url_params.get("ids");
+        if (idsParamPtr == nullptr) {
             validationErrors_++;
             return buildErrorResponse(400, "Bad Request", "Missing 'ids' parameter");
+        }
+
+        std::string idsParam(idsParamPtr);
+        if (idsParam.empty()) {
+            validationErrors_++;
+            return buildErrorResponse(400, "Bad Request", "Empty 'ids' parameter");
         }
 
         // Parse node IDs
@@ -174,12 +176,15 @@ crow::response APIHandler::handleReadRequest(const crow::request& req) {
             !opcClient_->isConnected()) {
 
             // Try to extract node IDs for cache fallback
-            std::string idsParam = req.url_params.get("ids");
-            if (!idsParam.empty()) {
-                std::vector<std::string> nodeIds = parseNodeIds(idsParam);
-                if (!nodeIds.empty()) {
-                    // Try cache fallback for the first node as an example
-                    return buildCacheErrorResponse(nodeIds[0], errorMsg);
+            const char* idsParamPtr = req.url_params.get("ids");
+            if (idsParamPtr != nullptr) {
+                std::string idsParam(idsParamPtr);
+                if (!idsParam.empty()) {
+                    std::vector<std::string> nodeIds = parseNodeIds(idsParam);
+                    if (!nodeIds.empty()) {
+                        // Try cache fallback for the first node as an example
+                        return buildCacheErrorResponse(nodeIds[0], errorMsg);
+                    }
                 }
             }
         }
@@ -606,8 +611,13 @@ bool APIHandler::validateRequest(const crow::request& req) {
         return false;
     }
 
-    // Check if ids parameter exists
-    std::string idsParam = req.url_params.get("ids");
+    // Check if ids parameter exists and is not empty
+    const char* idsParamPtr = req.url_params.get("ids");
+    if (idsParamPtr == nullptr) {
+        return false;
+    }
+
+    std::string idsParam(idsParamPtr);
     return !idsParam.empty();
 }
 
